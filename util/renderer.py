@@ -2,7 +2,7 @@ from binaryninja import BinaryView, Type, DataRenderer, TypeContext, Instruction
 from binaryninja.types import NamedTypeReferenceType
 from ..heap import SvmHeap
 from ..types import is_pointer_to_java_type
-from ..types.jdk.string import read_string
+from ..types.jdk.string import SubstrateString
 
 def with_annotation(*components: list[list[InstructionTextToken]]):
     inner = []
@@ -67,7 +67,8 @@ class SvmHeapRenderer(DataRenderer):
             if isinstance(var_type, NamedTypeReferenceType):
                 var_type = var_type.target(view)
 
-            if getattr(var_type.registered_name, 'name', None) == 'java.lang.String' and (string := read_string(heap, target)) is not None:
+            string_type = SubstrateString.for_view(heap)
+            if getattr(var_type.registered_name, 'name', None) == 'java.lang.String' and (string := string_type.read(target)) is not None:
                 line.append(InstructionTextToken(
                     InstructionTextTokenType.StringToken,
                     f'"{string.replace('"', '\\"')}"',

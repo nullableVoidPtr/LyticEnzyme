@@ -3,8 +3,8 @@ from binaryninja.types import Type, TypeBuilder
 
 from .primitive import primitive_type_definitions
 from .object import make_object_ptr, object_type_definitions
-from .bytearray import byte_array_type_definitions
-from .string import string_type_definitions
+from .bytearray import SubstrateByteArray
+from .string import SubstrateString
 from .module import module_type_definitions
 from .klass import SubstrateClass
 
@@ -15,10 +15,11 @@ def jdk_type_definitions(bv: BinaryView) -> list[tuple[str, Type | TypeBuilder]]
 		for definition_factory in [
             object_type_definitions,
 			primitive_type_definitions,
-			byte_array_type_definitions,
-			string_type_definitions,
+			SubstrateByteArray.make_type_definitions,
+			SubstrateString.make_type_definitions,
             module_type_definitions,
-            SubstrateClass.make_type_definitions,
+			# Dynamically reconstructed
+            # SubstrateClass.make_type_definitions,
 		]
 		for t in definition_factory(bv)
 	]

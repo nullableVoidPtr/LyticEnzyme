@@ -3,42 +3,39 @@ from binaryninja.plugin import PluginCommand, BackgroundTaskThread
 
 from .log import logger
 from .types import create_java_types
-from .types import is_instance_of_type, find_instances_by_type_name
 from .types import is_object_array
+from .types.meta import SubstrateType
 from .heap import SvmHeap
 from .define import recursively_define
 
 def find_image_info(heap: SvmHeap):
-    if (code_info_type := heap.view.get_type_by_name("com.oracle.svm.core.code.ImageCodeInfo")):
-        search_offset = code_info_type['classes'].offset
-    else:
-        search_offset = 0x60
+    code_info_type = SubstrateType.by_name(heap, 'com.oracle.svm.core.code.ImageCodeInfo')
+    search_offset = code_info_type['classes'].offset
 
     from .types.jdk.klass import SubstrateClass
-    class_type = SubstrateClass.for_view(heap.view)
-    for class_array in find_instances_by_type_name(heap, "[Ljava.lang.Class;"):
-        if is_object_array(heap, class_array, lambda n, e: class_type.is_instance(e)) is None:
+    class_type = SubstrateClass.for_view(heap)
+    for class_array in class_type.array_type.find_instances():
+        if is_object_array(heap, class_array, class_type.is_instance) is None:
             continue
 
         for addr in heap.find_refs_to(class_array):
-            if not is_instance_of_type(heap, code_info := addr - search_offset, "com.oracle.svm.core.code.ImageCodeInfo"):
+            if not code_info_type.is_instance(code_info := addr - search_offset):
                 continue
 
             return code_info
 
 def find_image_interned_strings(heap: SvmHeap):
-    if (interned_strings_type := heap.view.get_type_by_name("com.oracle.svm.core.jdk.ImageInternedStrings")):
-        search_offset = interned_strings_type['imageInternedStrings'].offset
-    else:
-        search_offset = 0x8
+    interned_strings_type = SubstrateType.by_name(heap, "com.oracle.svm.core.jdk.ImageInternedStrings")
+    search_offset = interned_strings_type['imageInternedStrings'].offset
 
-    from .types.jdk.string import is_string_instance
-    for string_array in find_instances_by_type_name(heap, "[Ljava.lang.String;"):
-        if is_object_array(heap, string_array, is_string_instance) is None:
+    from .types.jdk.string import SubstrateString
+    string_type = SubstrateString.for_view(heap)
+    for string_array in string_type.array_type.find_instances():
+        if is_object_array(heap, string_array, string_type.is_instance) is None:
             continue
 
         for addr in heap.find_refs_to(string_array):
-            if not is_instance_of_type(heap, interned_strings := addr - search_offset, "com.oracle.svm.core.jdk.ImageInternedStrings"):
+            if not interned_strings_type.is_instance(interned_strings := addr - search_offset):
                 continue
 
             return interned_strings
@@ -48,28 +45,35 @@ def _analyse(view: BinaryView, *, task: 'AnalysisTask' | None = None):
 
     heap = SvmHeap.for_view(view)
 
+    from .types.jdk.klass import SubstrateClass
+    class_type = SubstrateClass.for_view(heap)
+    class_type.hub_address = heap.class_hub
+
     start_addrs = []
 
-    if (hub_support_type := heap.view.get_type_by_name("com.oracle.svm.core.hub.DynamicHubSupport")):
-        search_offset = hub_support_type['referenceMapEncoding'].offset
-    else:
-        search_offset = 0x8
+    hub_support_type = SubstrateType.by_name(heap, 'com.oracle.svm.core.hub.DynamicHubSupport', find_hub=True)
+    search_offset = hub_support_type['referenceMapEncoding'].offset
 
     if task:
         task.progress = 'Finding instance reference maps...'
 
-    for hub_support in find_instances_by_type_name(heap, "com.oracle.svm.core.hub.DynamicHubSupport"):
+    from .types.jdk.bytearray import SubstrateByteArray
+    array_type = SubstrateByteArray.for_view(view)
+    for hub_support in hub_support_type.find_instances():
         if (reference_map_obj := heap.read_pointer(hub_support + search_offset)) is None:
             continue
 
-        from .types.jdk.bytearray import is_byte_array
-        if not is_byte_array(heap, reference_map_obj):
+        if not array_type.is_instance(reference_map_obj):
             continue
 
-        heap.instance_reference_map_offset = reference_map_obj + heap.view.get_type_by_name('byte[]')['data'].offset
+        heap.instance_reference_map_len = view.read_int(reference_map_obj + array_type['len'].offset, 4)
+        heap.instance_reference_map_offset = reference_map_obj + array_type['data'].offset
         logger.log_info(f"DynamicHubSupport: {hex(hub_support)}")
         start_addrs.append(hub_support)
         break
+
+    # HACK: don't know how to cleanly separate from heap
+    class_type.reconstruct_type(class_type.hub_address)
 
     if task:
         task.progress = 'Finding ImageCodeInfo(s)...'
@@ -102,3 +106,8 @@ PluginCommand.register('LyticEnzyme\\Analyse', '', analyse)
 from .util import SvmHeapRenderer, SvmStringRecognizer
 SvmHeapRenderer().register_type_specific()
 SvmStringRecognizer().register()
+
+# TODO: recognise open world and define accordingly
+# TODO: closed type field_10 is actually
+# short ClosedTypeWorldTypeCheckSlots[variable length]
+# fields can just be... not included if it tree shaking analysis determines that it's not needed 

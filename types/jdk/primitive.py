@@ -1,5 +1,7 @@
-from binaryninja import BinaryView, Endianness
+from binaryninja import BinaryView
 from binaryninja.types import Type, TypeBuilder
+
+from ..meta import SubstrateType
 
 def primitive_type_definitions(_: BinaryView) -> list[tuple[str, Type | TypeBuilder]]:
     jboolean = TypeBuilder.bool()
@@ -32,3 +34,39 @@ def primitive_type_definitions(_: BinaryView) -> list[tuple[str, Type | TypeBuil
         ('jdouble', jdouble),
         ('jvoid', jvoid),
     ]
+
+class SubstrateBooleanMeta(SubstrateType):
+    raw_name = 'boolean'
+    name = 'jboolean'
+
+class SubstrateByteMeta(SubstrateType):
+    raw_name = 'byte'
+    name = 'jbyte'
+
+class SubstrateCharMeta(SubstrateType):
+    raw_name = 'char'
+    name = 'jchar'
+
+class SubstrateShortMeta(SubstrateType):
+    raw_name = 'short'
+    name = 'jshort'
+
+class SubstrateIntMeta(SubstrateType):
+    raw_name = 'int'
+    name = 'jint'
+
+class SubstrateLongMeta(SubstrateType):
+    raw_name = 'long'
+    name = 'jlong'
+
+class SubstrateFloatMeta(SubstrateType):
+    raw_name = 'float'
+    name = 'jfloat'
+
+class SubstrateDoubleMeta(SubstrateType):
+    raw_name = 'double'
+    name = 'jdouble'
+
+class SubstrateVoidMeta(SubstrateType):
+    raw_name = 'void'
+    name = 'jvoid'

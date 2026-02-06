@@ -4,7 +4,7 @@ from binaryninja import Function, HighLevelILInstruction, Type
 
 from ..heap import SvmHeap
 from ..types import is_pointer_to_java_type
-from ..types.jdk.string import read_string
+from ..types.jdk.string import SubstrateString
 
 encoded_string_type = CustomStringType.register("SubstrateVM", "", "_svm")
 
@@ -18,7 +18,7 @@ class SvmStringRecognizer(StringRecognizer):
         if not is_pointer_to_java_type(instr.function.view, type, 'java.lang.String'):
             return None
 
-        result = read_string(SvmHeap.for_view(instr.function.view), val)
+        result = SubstrateString.for_view(instr.function.view).read(val)
 
         loc = DerivedStringLocation(DerivedStringLocationType.DataBackedStringLocation, val, len(result) + 3)
         return DerivedString(result, loc, encoded_string_type)

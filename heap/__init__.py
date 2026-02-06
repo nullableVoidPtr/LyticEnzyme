@@ -11,9 +11,11 @@ class SvmHeap:
     compression_shift: int
 
     instance_reference_map_offset: int | None
+    instance_reference_map_len: int | None
     _hub_to_reference_map_index: dict[int, int]
+    class_hub: int
 
-    def __init__(self, view: BinaryView, start: int, end: int, base: int | None, compression_shift: int):
+    def __init__(self, view: BinaryView, start: int, end: int, base: int | None, compression_shift: int, class_hub: int):
         self.view = view
         self.start = start
         self.end = end
@@ -21,7 +23,10 @@ class SvmHeap:
         self.compression_shift = compression_shift
 
         self.instance_reference_map_offset = None
+        self.instance_reference_map_len = None
         self._hub_to_reference_map_index = {}
+        
+        self.class_hub = class_hub
 
     def resolve_target(self, addr: int):
         # TODO: analyse reserved_bit
@@ -46,6 +51,18 @@ class SvmHeap:
 
     def make_pointer(self, addr: int):
         return (addr - (self.base or 0)) >> self.compression_shift
+
+    def relative_offsets_by_index(self, index: int):
+        if self.instance_reference_map_offset is None:
+            return
+        
+        reference_map = self.instance_reference_map_offset + index
+        num_entries = self.view.read_int(reference_map, 4, True)
+        for offset in decode_reference_map(
+            self.view.read(reference_map, 4 + (num_entries * self.view.arch.address_size)),
+            reference_size=self.view.arch.address_size
+        ):
+            yield offset
 
     def find_refs_to(self, target: int):
         target_ptr = self.make_pointer(target).to_bytes(
@@ -78,12 +95,7 @@ class SvmHeap:
                 self.view.get_type_by_name('java.lang.Class'),
             )['referenceMapIndex'].value
 
-        reference_map = self.instance_reference_map_offset + index
-        num_entries = self.view.read_int(reference_map, 4, True)
-        for offset in decode_reference_map(
-            self.view.read(reference_map, 4 + (num_entries * 8)),
-            reference_size=self.view.arch.address_size
-        ):
+        for offset in self.relative_offsets_by_index(index):
             if (target := self.read_pointer(source + offset)) is not None:
                 yield target
 
@@ -93,6 +105,7 @@ class SvmHeap:
             'end': self.end,
             'base': self.base or 0,
             'compression_shift': self.compression_shift or 0,
+            'class_hub': self.class_hub,
         })
 
     @classmethod
@@ -107,8 +120,10 @@ class SvmHeap:
                 return None
             if not isinstance(compression_shift := metadata['compression_shift'], int):
                 return None
+            if not isinstance(class_hub := metadata['class_hub'], int):
+                return None
             
-            return cls(view, start, end, base, compression_shift)
+            return cls(view, start, end, base, compression_shift, class_hub)
         except KeyError:
             return None
 
@@ -164,6 +179,7 @@ class SvmHeap:
                                 heap_section.end,
                                 potential_heap_base if use_heap_base else None,
                                 compression_shift,
+                                resolved_metaclass_hub_addr,
                             )
                             if allow_metadata:
                                 heap.save_to_metadata()
