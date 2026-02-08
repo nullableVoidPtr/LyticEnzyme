@@ -5,6 +5,7 @@ from .log import logger
 from .types import create_java_types
 from .types import is_object_array
 from .types.meta import SubstrateType
+from .types.svm.info import ImageCodeInfo
 from .heap import SvmHeap
 from .define import recursively_define
 
@@ -77,9 +78,9 @@ def _analyse(view: BinaryView, *, task: 'AnalysisTask' | None = None):
 
     if task:
         task.progress = 'Finding ImageCodeInfo(s)...'
-    if (code_info := find_image_info(heap)) is not None:
-        logger.log_info(f"ImageCodeInfo: {hex(code_info)}")
-        start_addrs.append(code_info)
+    if (code_info_addr := find_image_info(heap)) is not None:
+        logger.log_info(f"ImageCodeInfo: {hex(code_info_addr)}")
+        start_addrs.append(code_info_addr)
 
     if task:
         task.progress = 'Finding heap strings...'
@@ -88,6 +89,30 @@ def _analyse(view: BinaryView, *, task: 'AnalysisTask' | None = None):
         start_addrs.append(interned_strings)
 
     recursively_define(heap, start_addrs, task=task)
+
+    if code_info_addr is not None:
+        image_code_info = ImageCodeInfo.for_view(heap)(code_info_addr)
+        for method in (all_methods := set(
+            func
+            for klass in image_code_info.classes
+            if klass is not None
+            for func in klass.vtable
+        )):
+            view.add_function(method, auto_discovered=True)
+
+        view.update_analysis_and_wait()
+
+        for addr in all_methods:
+            func = view.get_function_at(addr)
+            try:
+                method = image_code_info.lookup_method(addr)
+            except:
+                continue
+
+            if method is None:
+                continue
+
+            func.name = str(method)
 
 class AnalysisTask(BackgroundTaskThread):
     def __init__(self, view: BinaryView):
@@ -107,7 +132,4 @@ from .util import SvmHeapRenderer, SvmStringRecognizer
 SvmHeapRenderer().register_type_specific()
 SvmStringRecognizer().register()
 
-# TODO: recognise open world and define accordingly
-# TODO: closed type field_10 is actually
-# short ClosedTypeWorldTypeCheckSlots[variable length]
 # fields can just be... not included if it tree shaking analysis determines that it's not needed 

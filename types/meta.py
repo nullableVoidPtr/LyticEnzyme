@@ -5,7 +5,6 @@ from types import new_class
 
 from ..heap import SvmHeap
 from .layout_encoding import LayoutEncoding
-from .jdk.object import make_object_ptr
 
 class SubstrateTypeMeta(type):
     _type_registry: dict[BinaryView, dict[str, 'SubstrateType']] = {}
@@ -166,7 +165,6 @@ class SubstrateType(type, metaclass=SubstrateTypeMeta):
         from .jdk.klass import SubstrateClass
         class_type = SubstrateClass.for_view(cls.heap)
 
-
         if cls.hub_address == addr:
             return
 
@@ -241,6 +239,8 @@ class SubstrateType(type, metaclass=SubstrateTypeMeta):
         id_hash_offset: int | None = None,
         monitor_offset: int | None = None,
     ):
+        from .jdk.object import make_object_ptr
+
         cls.layout = layout_encoding
 
         # Should remain invariant
@@ -426,6 +426,7 @@ class SubstrateType(type, metaclass=SubstrateTypeMeta):
     def from_hub(heap: SvmHeap, hub: int):
         view = heap.view
 
+        # TODO: should be SubstrateClass.from_hub(heap, hub).instance_type
         from .jdk.klass import SubstrateClass
         hub_accessor = view.typed_data_accessor(hub, SubstrateClass.for_view(view).type)
         

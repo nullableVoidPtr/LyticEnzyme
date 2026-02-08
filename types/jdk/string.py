@@ -49,7 +49,7 @@ class SubstrateString:
             **kwargs,
         )
 
-    # TODO: UTF16 logic
+    # TODO: check if UTF16 logic works
 
     @classmethod
     def read_unchecked(cls, addr: int):

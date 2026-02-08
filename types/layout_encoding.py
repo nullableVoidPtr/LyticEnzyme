@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from enum import IntEnum, auto
 from typing import Optional
 
+# ref: com.oracle.svm.core.hub.LayoutEncoding
 class LayoutType(IntEnum):
     NEUTRAL = auto()
     PRIMITIVE = auto()

@@ -2,6 +2,8 @@ from binaryninja import BinaryView
 from binaryninja.types import Type, TypeBuilder, StructureBuilder, BaseStructure
 from binaryninja.enums import NamedTypeReferenceClass
 
+from .info import ImageCodeInfo
+
 def create_hub_builder(view: BinaryView, **kwargs) -> StructureBuilder:
     struct = TypeBuilder.class_type()
     struct.base_structures = [
@@ -78,31 +80,6 @@ def svm_type_definitions(view: BinaryView) -> list[tuple[str, Type | TypeBuilder
     companion_struct.append(TypeBuilder.char(), 'additionalFlags')
     companion_struct.append(TypeBuilder.bool(), 'canUnsafeAllocate')
 
-    image_code_info_struct = create_hub_builder(view)
-    image_code_info_struct.append(
-        TypeBuilder.named_type_reference(
-            NamedTypeReferenceClass.TypedefNamedTypeClass,
-            'org.graalvm.nativeimage.c.function.CFunctionPointer',
-            width=view.arch.address_size,
-        ),
-        'codeStart'
-    )
-    image_code_info_struct.append(TypeBuilder.int(8, False), 'codeSize')
-    image_code_info_struct.append(TypeBuilder.int(8, False), 'dataOffset')
-    image_code_info_struct.append(TypeBuilder.int(8, False), 'dataSize')
-    image_code_info_struct.append(TypeBuilder.int(8, False), 'codeAndDataMemorySize')
-    image_code_info_struct.append(make_object_ptr(view, 'java.lang.Object[]'), 'objectFields')
-    image_code_info_struct.append(make_object_ptr(view, 'byte[]'), 'codeInfoIndex')
-    image_code_info_struct.append(make_object_ptr(view, 'byte[]'), 'codeInfoEncodings')
-    image_code_info_struct.append(make_object_ptr(view, 'byte[]'), 'referenceMapEncoding')
-    image_code_info_struct.append(make_object_ptr(view, 'byte[]'), 'frameInfoEncodings')
-    image_code_info_struct.append(make_object_ptr(view, 'java.lang.Object[]'), 'objectConstants')
-    image_code_info_struct.append(make_object_ptr(view, 'java.lang.Class[]'), 'classes')
-    image_code_info_struct.append(make_object_ptr(view, 'java.lang.String[]'), 'memberNames')
-    image_code_info_struct.append(make_object_ptr(view, 'java.lang.String[]'), 'otherStrings')
-    image_code_info_struct.append(make_object_ptr(view, 'byte[]'), 'methodTable')
-    image_code_info_struct.append(TypeBuilder.int(4, True), 'methodTableFirstId')
-
     interned_strings_struct = create_hub_builder(view)
     interned_strings_struct.append(make_object_ptr(view, 'java.lang.String[]'), 'imageInternedStrings')
 
@@ -124,8 +101,8 @@ def svm_type_definitions(view: BinaryView) -> list[tuple[str, Type | TypeBuilder
         ),
         ('com.oracle.svm.core.classinitialization.ClassInitializationInfo', class_init_struct),
         ('com.oracle.svm.core.hub.DynamicHub$ReflectionMetadata', reflection_metadata),
+        *ImageCodeInfo.make_type_definitions(view),
         ('com.oracle.svm.core.hub.DynamicHubCompanion', companion_struct),
-        ('com.oracle.svm.core.code.ImageCodeInfo', image_code_info_struct),
         ('com.oracle.svm.core.jdk.ImageInternedStrings', interned_strings_struct),
         ('com.oracle.svm.core.code.RuntimeMetadataEncoding', runtime_metadata_struct),
         ('com.oracle.svm.core.hub.DynamicHubSupport', hub_support_struct),

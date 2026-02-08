@@ -1,41 +1,15 @@
 from typing import Generator
 
-class Int4Iterator:
-    data: bytes
-    pos: int
+from ..reader import IntIterator
 
-    def __init__(self, data: bytes):
-        self.data = data
-        self.pos = 0
-
-    def __iter__(self):
-        return self
-    
-    def __len__(self):
-        return (len(self.data) - self.pos) // 4
-        
-    def __next__(self) -> int:
-        if self.pos + 4 > len(self.data):
-            raise StopIteration
-        
-        res = int.from_bytes(
-            self.data[self.pos:self.pos+4],
-            'little',
-            signed=True,
-        )
-
-        self.pos += 4
-
-        return res
-
-
+# ref: com.oracle.svm.core.heap.InstanceReferenceMapDecoder
 def decode_reference_map(
-    encoding: bytes | bytearray | Int4Iterator,
+    encoding: bytes | bytearray | IntIterator,
     *,
     reference_size: int = 8
 ) -> Generator[int]:
-    if not isinstance(encoding, Int4Iterator):
-        encoding = Int4Iterator(encoding)
+    if not isinstance(encoding, IntIterator):
+        encoding = IntIterator(encoding, signed=True)
 
     try:
         num_entries = next(encoding)
@@ -57,7 +31,7 @@ def decode_all_reference_maps(
 ) -> dict[int, list[int]]:
     reference_map = {}
 
-    ints = Int4Iterator(encoding)
+    ints = IntIterator(encoding, signed=True)
     while ints:
         index = ints.pos
         if (offsets := decode_reference_map(ints, reference_size=reference_size)) is None:

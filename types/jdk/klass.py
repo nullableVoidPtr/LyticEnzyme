@@ -236,7 +236,6 @@ class SubstrateClass:
                     continue
 
                 try:
-                    # TODO check if these names are obfuscated
                     if string_type.read_unchecked(name) != 'java.lang.Class':
                         continue
                     if string_type.read_unchecked(name_of_string) != 'java.lang.String':
@@ -738,7 +737,48 @@ class SubstrateClass:
             },
             exec_body=None,
         )
+    
+    address: int
+    instance_type: SubstrateType
+    vtable: list
 
+    def __init__(self, address: int):
+        cls = type(self)
+
+        if not self.reconstructed:
+            raise TypeError
+
+        self.address = address
+
+        accessor = cls.typed_data_accessor(address)
+        
+        if address in (hub_mapping := SubstrateType.get_hub_mapping(cls.view)):
+            self.instance_type = hub_mapping[address]
+        else:
+            if (string := cls.heap.resolve_target(accessor['name'].value)) is None:
+                return None
+
+            from .string import SubstrateString
+            if (name := SubstrateString.for_view(cls.heap).read(string)) is None:
+                return None
+            
+            self.instance_type = SubstrateType.by_name(cls.heap, name)
+
+        self.instance_type.hub_address = self.address
+
+        self.name = self.instance_type.name
+
+        vtable_start = self.address + cls['vtable'].offset
+        self.vtable = [
+            cls.view.read_pointer(i)
+            for i in range(
+                vtable_start,
+                vtable_start + (accessor['vtableLength'].value * cls.view.arch.address_size),
+                cls.view.arch.address_size
+            )
+        ]
+
+# TODO: need to do class registry with a subclass on this second-order metaclass to avoid double work
 class SubstrateClassMeta(SubstrateType, base_specialisation=SubstrateClass):
     raw_name = 'java.lang.Class'
 

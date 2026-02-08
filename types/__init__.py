@@ -1,5 +1,5 @@
 from binaryninja import BinaryView
-from binaryninja.types import Type, PointerType, NamedTypeReferenceType, StructureType, StructureBuilder
+from binaryninja.types import Type, PointerType, NamedTypeReferenceType, StructureType
 
 from typing import Callable
 
@@ -31,6 +31,7 @@ def create_java_types(view: BinaryView):
         svm_type_definitions,
     ]:
         for (s, t) in factory(view):
+            # TODO: check old types and amend here
             types_list.append((s, t.immutable_copy()))
             if 'LyticEnzyme.Hub' in t.attributes:
                 known_types.append(s)

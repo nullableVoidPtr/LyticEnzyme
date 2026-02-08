@@ -4,10 +4,11 @@ Breakdown of GraalVM's SubstrateVM towards analysis of Native Image (AOT) binari
 
 - [x] Closed type world support
 - [x] Open type world support
-- [ ] Relative code pointers support
+- [ ] Relative code pointers (code base) support
 - [x] Extract type information from `java.lang.Class` objects
-  - [ ] Native hosted method naming
+  - [x] Native hosted method naming (partial)
   - [ ] Structure superclasses and inheritance
 - [x] String recognizer and data renderer
 - [x] Heap analyser
 - [ ] Function call convention fixup
+- [ ] Continuable analysis
