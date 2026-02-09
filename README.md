@@ -10,5 +10,11 @@ Breakdown of GraalVM's SubstrateVM towards analysis of Native Image (AOT) binari
   - [ ] Structure superclasses and inheritance
 - [x] String recognizer and data renderer
 - [x] Heap analyser
-- [ ] Function call convention fixup
+- [x] Function call convention fixup
+  - [x] SysV, Win64 on x86
+  - [x] AArch64
+  - [x] RISC-V
+  - [x] Thread register to `graal_isolatethread_t`
+  - [ ] Code base register
+- [ ] Class flags and modifiers
 - [ ] Continuable analysis

@@ -18,9 +18,13 @@ def with_annotation(*components: list[list[InstructionTextToken]]):
         InstructionTextToken(InstructionTextTokenType.AnnotationToken, '}'),
     ]
 
-def with_heap_offset(relative: int, *components: list[list[InstructionTextToken]]):
+def with_heap_offset(relative: int, *components: list[list[InstructionTextToken]], heap_base: int):
     return with_annotation([
-        InstructionTextToken(InstructionTextTokenType.ExternalSymbolToken, '__svm_heap_base'),
+        InstructionTextToken(
+            InstructionTextTokenType.ExternalSymbolToken,
+            '__svm_heap_base',
+            value=heap_base
+        ),
         InstructionTextToken(InstructionTextTokenType.OperationToken, ' + '),
         InstructionTextToken(InstructionTextTokenType.IntegerToken, hex(relative), relative),
     ], *components)
@@ -92,7 +96,7 @@ class SvmHeapRenderer(DataRenderer):
                 target,
             ))
 
-        line += with_heap_offset(raw)
+        line += with_heap_offset(raw, heap_base=heap.base)
 
         return [DisassemblyTextLine(line, addr)]
 

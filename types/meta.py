@@ -191,7 +191,8 @@ class SubstrateType(type, metaclass=SubstrateTypeMeta):
 
         hub_accessor = class_type.typed_data_accessor(addr)
 
-        if (component_hub := cls.heap.resolve_target(hub_accessor['componentType'].value)) is not None:
+        component_hub_ptr = hub_accessor['componentType'].value
+        if component_hub_ptr != 0 and (component_hub := cls.heap.resolve_target(component_hub_ptr)) is not None:
             cls.component_type = SubstrateType.from_hub(cls.heap, component_hub)
 
         if cls.layout is None:
@@ -207,7 +208,8 @@ class SubstrateType(type, metaclass=SubstrateTypeMeta):
                 cls.view.get_type_by_name('com.oracle.svm.core.hub.DynamicHubCompanion')
             )
 
-            if (array_hub := cls.heap.resolve_target(companion_accessor['arrayHub'].value)) is not None:
+            array_hub_ptr = companion_accessor['arrayHub'].value
+            if array_hub_ptr != 0 and (array_hub := cls.heap.resolve_target(array_hub_ptr)) is not None:
                 cls.array_type = SubstrateType.from_hub(cls.heap, array_hub)
 
     _id_hash_code_offset_override: int | None
@@ -225,10 +227,10 @@ class SubstrateType(type, metaclass=SubstrateTypeMeta):
         except:
             id_hash_code_offset = getattr(cls, '_id_hash_code_offset_override', None)
 
-        if id_hash_code_offset != cls.view.arch.address_size:
+        if id_hash_code_offset != cls.heap.address_size:
             return False
         
-        if cls.layout.array_base_offset != cls.view.arch.address_size + 4 + 4:
+        if cls.layout.array_base_offset != cls.heap.address_size + 4 + 4:
             return False
 
         return True
@@ -258,7 +260,7 @@ class SubstrateType(type, metaclass=SubstrateTypeMeta):
                 pass
 
             if id_hash_offset is not None and old_id_hash_offset is None:
-                if id_hash_offset != 0 and id_hash_offset >= cls.view.arch.address_size:
+                if id_hash_offset != 0 and id_hash_offset >= cls.heap.address_size:
                     class_type_builder.add_member_at_offset('identityHashCode', Type.int(4, True), id_hash_offset, False)
                     cls._id_hash_code_offset_override = id_hash_offset
                     type_changed = True
@@ -424,30 +426,11 @@ class SubstrateType(type, metaclass=SubstrateTypeMeta):
 
     @staticmethod
     def from_hub(heap: SvmHeap, hub: int):
-        view = heap.view
-
-        # TODO: should be SubstrateClass.from_hub(heap, hub).instance_type
         from .jdk.klass import SubstrateClass
-        hub_accessor = view.typed_data_accessor(hub, SubstrateClass.for_view(view).type)
-        
-        if hub in (hub_mapping := SubstrateType.get_hub_mapping(view)):
-            stype = hub_mapping[hub]
-        else:
-            if (string := heap.resolve_target(hub_accessor['name'].value)) is None:
-                return None
-
-            from .jdk.string import SubstrateString
-            if (name := SubstrateString.for_view(heap).read(string)) is None:
-                return None
-            
-            stype = SubstrateType.by_name(heap, name)
-
-        if not stype:
+        try:
+            return SubstrateClass.for_view(heap)(hub).instance_type
+        except ValueError:
             return None
-
-        stype.hub_address = hub
-
-        return stype
 
     @staticmethod
     def by_name(view_or_heap: BinaryView | SvmHeap, raw_type_name: str, type_name: str | None = None, *, find_hub = False):
@@ -464,3 +447,12 @@ class SubstrateType(type, metaclass=SubstrateTypeMeta):
             stype.find_hub()
 
         return stype
+
+class ManagedHeapObject:
+    _object_registry: dict[SubstrateType, dict[int, object]] = {}
+
+    def __call__(cls, address: int, *args, **kwargs):
+        if address not in (objects := cls._object_registry.setdefault(cls, {})):
+            objects[address] = super(ManagedHeapObject, cls).__call__(address, *args, **kwargs)
+
+        return objects[address]

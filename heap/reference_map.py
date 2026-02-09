@@ -38,4 +38,3 @@ def decode_all_reference_maps(
             return reference_map
 
         reference_map[index] = offsets
-

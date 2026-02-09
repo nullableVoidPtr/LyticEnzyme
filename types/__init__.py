@@ -20,7 +20,6 @@ REGISTER_OVERRIDES = {
     'float': 'jfloat',
     'double': 'jdouble',
     'void': 'jvoid',
-    # 'byte[]': '[B'
 }
 
 def create_java_types(view: BinaryView):
@@ -31,10 +30,21 @@ def create_java_types(view: BinaryView):
         svm_type_definitions,
     ]:
         for (s, t) in factory(view):
-            # TODO: check old types and amend here
-            types_list.append((s, t.immutable_copy()))
+            _type = t.immutable_copy()
+            if s in view.types:
+                if s == 'graal_isolatethread_t':
+                    continue
+                if s == 'java.lang.Class':
+                    # TODO: more rigorous checks
+                    continue
+
             if 'LyticEnzyme.Hub' in t.attributes:
+                if s in view.types:
+                    _type.attributes['LyticEnzyme.Hub'] = t.attributes['LyticEnzyme.Hub']
+
                 known_types.append(s)
+
+            types_list.append((s, _type))
 
     view.define_user_types(
         types_list,
@@ -54,11 +64,11 @@ def is_object_array(heap: SvmHeap, array: int, element_check: Callable[bool, [in
     if not (heap.start <= array_start <= heap.end):
         return False
 
-    array_end = array_start + (view.arch.address_size * length)
-    if not (heap.start <= array_end - view.arch.address_size <= heap.end):
+    array_end = array_start + (heap.address_size * length)
+    if not (heap.start <= array_end - heap.address_size <= heap.end):
         return False
 
-    for current in range(array_start, array_end, view.arch.address_size):
+    for current in range(array_start, array_end, heap.address_size):
         if (ptr := view.read_pointer(current)) == 0:
             continue
 
@@ -76,9 +86,6 @@ def is_pointer_to_java_type(view: BinaryView, type: Type, name: str | None = Non
     
     target = type.target
     if isinstance(target, NamedTypeReferenceType):
-        # if 'LyticEnzyme.IsObjectPointer' in target.attributes:
-        #     return True
-
         target = target.target(view)
 
     if not isinstance(target, StructureType) or 'LyticEnzyme.Hub' not in target.attributes:

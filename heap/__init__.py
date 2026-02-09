@@ -1,4 +1,4 @@
-from binaryninja import BinaryView, Endianness
+from binaryninja import BinaryView, Endianness, BinaryDataNotification, NotificationType, DataVariable
 
 from .reference_map import decode_reference_map
 class SvmHeap:
@@ -27,6 +27,10 @@ class SvmHeap:
         self._hub_to_reference_map_index = {}
         
         self.class_hub = class_hub
+
+    @property
+    def address_size(self):
+        return self.view.arch.address_size
 
     def resolve_target(self, addr: int):
         # TODO: analyse reserved_bit
@@ -59,14 +63,14 @@ class SvmHeap:
         reference_map = self.instance_reference_map_offset + index
         num_entries = self.view.read_int(reference_map, 4, True)
         for offset in decode_reference_map(
-            self.view.read(reference_map, 4 + (num_entries * self.view.arch.address_size)),
-            reference_size=self.view.arch.address_size
+            self.view.read(reference_map, 4 + (num_entries * self.address_size)),
+            reference_size=self.address_size
         ):
             yield offset
 
     def find_refs_to(self, target: int):
         target_ptr = self.make_pointer(target).to_bytes(
-            self.view.arch.address_size,
+            self.address_size,
             "little" if self.view.arch.endianness == Endianness.LittleEndian else "big",
         )
 

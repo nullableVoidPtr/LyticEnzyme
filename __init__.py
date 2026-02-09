@@ -1,5 +1,6 @@
-from binaryninja import BinaryView
+from binaryninja import BinaryView, Symbol, Type, FunctionType
 from binaryninja.plugin import PluginCommand, BackgroundTaskThread
+from binaryninja.enums import SymbolType, SectionSemantics, VariableSourceType
 
 from .log import logger
 from .types import create_java_types
@@ -8,6 +9,7 @@ from .types.meta import SubstrateType
 from .types.svm.info import ImageCodeInfo
 from .heap import SvmHeap
 from .define import recursively_define
+from .callingconvention import SvmCallingConvention
 
 def find_image_info(heap: SvmHeap):
     code_info_type = SubstrateType.by_name(heap, 'com.oracle.svm.core.code.ImageCodeInfo')
@@ -41,10 +43,125 @@ def find_image_interned_strings(heap: SvmHeap):
 
             return interned_strings
 
+def fixup_methods(heap: SvmHeap, image_code_info: ImageCodeInfo, *, task: 'AnalysisTask' | None = None):
+    named_methods = 0
+
+    heap.view.set_analysis_hold(True)
+
+    if task:
+        task.progress = 'Defining vtable methods...'
+
+    for method in (all_methods := set(
+        func
+        for klass in image_code_info.classes
+        if klass is not None
+        for func in klass.vtable
+    )):
+        heap.view.add_function(method, auto_discovered=True)
+
+    heap.view.set_analysis_hold(False)
+
+    heap.view.update_analysis_and_wait()
+
+    all_methods.update(
+        func.start
+        for func in heap.view.functions
+        if image_code_info.code_start <= func.start < image_code_info.code_end
+    )
+
+    if task:
+        task.progress = 'Fixing up known methods...'
+
+    heap.view.set_analysis_hold(True)
+    ccs = {}
+    for i, addr in enumerate(all_methods):
+        if task:
+            task.progress = f'Fixing up known methods ({i}/{len(all_methods)})...'
+        else:
+            print(f'Fixing up known methods ({i}/{len(all_methods)})...')
+
+        func = heap.view.get_function_at(addr)
+        if not func:
+            continue
+
+        if func.calling_convention not in ccs:
+            cc = SvmCallingConvention(func.calling_convention)
+            heap.view.platform.register_calling_convention(cc)
+            ccs[func.calling_convention] = cc
+
+        calling_convention = ccs[func.calling_convention]
+
+        func.type = FunctionType.create(
+            ret=func.type.return_value,
+            params=[
+                p
+                for p in func.type.parameters
+                if not p.location or p.location.source_type != VariableSourceType.RegisterVariableSourceType or p.location.storage not in [
+                    calling_convention.heap_base_register,
+                    calling_convention.thread_register,
+                ]
+            ],
+            calling_convention=calling_convention,
+            variable_arguments=func.type.has_variable_arguments,
+            stack_adjust=func.type.stack_adjustment,
+            can_return=func.type.can_return,
+            pure=func.type.pure,
+        )
+
+        try:
+            method = image_code_info.lookup_method(addr)
+        except:
+            continue
+
+        if method is None:
+            continue
+
+        func.name = str(method)
+        named_methods += 1
+
+    if task:
+        task.progress = f'Analysing methods...'
+
+    heap.view.set_analysis_hold(False)
+
+    print(f"Finished retyping methods")
+
+    heap.view.update_analysis()
+
+    logger.log_info(f"Named {named_methods} methods")
+
+    heap.view.update_analysis()
+
 def _analyse(view: BinaryView, *, task: 'AnalysisTask' | None = None):
     create_java_types(view)
 
     heap = SvmHeap.for_view(view)
+
+    # This won't be visible in Linear view
+    view.define_data_var(
+        heap.base,
+        Type.void(),
+        Symbol(
+            SymbolType.ExternalSymbol,
+            heap.base,
+            '__svm_heap_base',
+        ),
+    )
+
+    svm_internals_start = view.end
+    view.add_user_segment(svm_internals_start, 0x10, 0, 0, 0)
+    view.add_user_section(
+        '.svm_synthetics',
+        svm_internals_start,
+        0x10,
+        SectionSemantics.ExternalSectionSemantics,
+        entry_size=0,
+    )
+    view.define_data_var(
+        svm_internals_start,
+        Type.pointer(view.arch, Type.void()),
+        Symbol(SymbolType.ExternalSymbol, svm_internals_start, '__svm_isolate_thread')
+    )
 
     from .types.jdk.klass import SubstrateClass
     class_type = SubstrateClass.for_view(heap)
@@ -91,28 +208,11 @@ def _analyse(view: BinaryView, *, task: 'AnalysisTask' | None = None):
     recursively_define(heap, start_addrs, task=task)
 
     if code_info_addr is not None:
+        if task:
+            task.progress = 'Parsing ImageCodeInfo...'
+
         image_code_info = ImageCodeInfo.for_view(heap)(code_info_addr)
-        for method in (all_methods := set(
-            func
-            for klass in image_code_info.classes
-            if klass is not None
-            for func in klass.vtable
-        )):
-            view.add_function(method, auto_discovered=True)
-
-        view.update_analysis_and_wait()
-
-        for addr in all_methods:
-            func = view.get_function_at(addr)
-            try:
-                method = image_code_info.lookup_method(addr)
-            except:
-                continue
-
-            if method is None:
-                continue
-
-            func.name = str(method)
+        fixup_methods(heap, image_code_info, task=task)
 
 class AnalysisTask(BackgroundTaskThread):
     def __init__(self, view: BinaryView):

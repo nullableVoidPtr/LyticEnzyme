@@ -12,8 +12,8 @@ def create_hub_builder(view: BinaryView, **kwargs) -> StructureBuilder:
                 NamedTypeReferenceClass.ClassNamedTypeClass,
                 'java.lang.Object'
             ),
-            0,
-            view.arch.address_size
+            offset=0,
+            width=view.arch.address_size,
         )
     ]
     struct.attributes["LyticEnzyme.Hub"] = kwargs.get("hub_address", "unknown")
@@ -22,6 +22,31 @@ def create_hub_builder(view: BinaryView, **kwargs) -> StructureBuilder:
 
 def svm_type_definitions(view: BinaryView) -> list[tuple[str, Type | TypeBuilder]]:
     from ..jdk.object import make_object_ptr
+
+    heap_chunk_header = TypeBuilder.structure()
+    heap_chunk_header.append(TypeBuilder.int(8, False), 'EndOffset')
+    heap_chunk_header.append(TypeBuilder.int(8, False), 'IdentityHashSalt')
+    heap_chunk_header.append(TypeBuilder.int(8, True), 'OffsetToNextChunk')
+    heap_chunk_header.append(TypeBuilder.int(8, True), 'OffsetToPreviousChunk')
+    heap_chunk_header.append(make_object_ptr(view, 'com.oracle.svm.core.genscavenge.Space'), 'Space')
+    heap_chunk_header.append(TypeBuilder.int(8, False), 'TopOffset')
+    heap_chunk_header.append(TypeBuilder.int(4, True), 'PinnedObjectCount')
+
+    aligned_heap_chunk_header = TypeBuilder.structure()
+    aligned_heap_chunk_header.base_structures = [
+        BaseStructure(
+            Type.named_type_reference(
+                NamedTypeReferenceClass.StructNamedTypeClass,
+                'com.oracle.svm.core.genscavenge.HeapChunk$Header',
+            ),
+            offset=0,
+            width=heap_chunk_header.width,
+        ),
+    ]
+    aligned_heap_chunk_header.append(TypeBuilder.bool(), 'ShouldSweepInsteadOfCompact')
+
+    c_function_ptr = TypeBuilder.pointer(view.arch, TypeBuilder.void())
+    c_function_ptr.attributes['LyticEnzyme.Hub'] = 'unknown'
 
     func_ptr_holder_struct = create_hub_builder(view)
     func_ptr_holder_struct.append(
@@ -32,6 +57,14 @@ def svm_type_definitions(view: BinaryView) -> list[tuple[str, Type | TypeBuilder
         ),
         'functionPointer',
     )
+
+    isolate_thread = TypeBuilder.structure()
+
+    isolate_thread_ptr = TypeBuilder.pointer(view.arch, TypeBuilder.named_type_reference(
+        NamedTypeReferenceClass.StructNamedTypeClass,
+        'graal_isolatethread_t',
+        width=view.arch.address_size,
+    ))
 
     class_init_struct = create_hub_builder(view)
     class_init_struct.append(make_object_ptr(view, 'com.oracle.svm.core.FunctionPointerHolder'), 'classInitializer')
@@ -90,15 +123,12 @@ def svm_type_definitions(view: BinaryView) -> list[tuple[str, Type | TypeBuilder
     hub_support_struct.append(make_object_ptr(view, 'byte[]'), 'referenceMapEncoding')
 
     return [
-        (
-            'org.graalvm.nativeimage.c.function.CFunctionPointer',
-            TypeBuilder.pointer(view.arch, TypeBuilder.void()),
-        ),
+        ('com.oracle.svm.core.genscavenge.HeapChunk$Header', heap_chunk_header),
+        ('com.oracle.svm.core.genscavenge.AlignedHeapChunk$AlignedHeader', aligned_heap_chunk_header),
+        ('org.graalvm.nativeimage.c.function.CFunctionPointer', c_function_ptr),
         ('com.oracle.svm.core.FunctionPointerHolder', func_ptr_holder_struct),
-        (
-            'org.graalvm.nativeimage.IsolateThread',
-            TypeBuilder.pointer(view.arch, TypeBuilder.void()),
-        ),
+        ('graal_isolatethread_t', isolate_thread),
+        ('org.graalvm.nativeimage.IsolateThread', isolate_thread_ptr),
         ('com.oracle.svm.core.classinitialization.ClassInitializationInfo', class_init_struct),
         ('com.oracle.svm.core.hub.DynamicHub$ReflectionMetadata', reflection_metadata),
         *ImageCodeInfo.make_type_definitions(view),

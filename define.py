@@ -1,3 +1,4 @@
+from binaryninja import Type
 from .log import logger
 from .types.meta import SubstrateType
 from .heap import SvmHeap
@@ -7,12 +8,36 @@ if TYPE_CHECKING:
     from . import AnalysisTask
 
 def recursively_define(heap: SvmHeap, addrs: list[int], *, task: 'AnalysisTask' | None = None):
-    view = heap.view
+    defined_vars = 0
+
+    chunk_starts = set()
+    chunk_addr = heap.start
+    while chunk_addr is not None:
+        accessor = heap.view.typed_data_accessor(
+            chunk_addr,
+            heap.view.get_type_by_name('com.oracle.svm.core.genscavenge.HeapChunk$Header'),
+        )
+
+        heap.view.define_data_var(
+            chunk_addr,
+            Type.named_type_from_registered_type(
+                heap.view,
+                'com.oracle.svm.core.genscavenge.AlignedHeapChunk$AlignedHeader',
+            ),
+        )
+        defined_vars += 1
+
+        if (next_offset := accessor['OffsetToNextChunk'].value) == 0:
+            if (next_offset := accessor['EndOffset'].value) == 0:
+                break
+        
+        chunk_starts.add(chunk_addr)
+
+        chunk_addr += next_offset
 
     visited = set()
     queue = addrs.copy()
 
-    defined_vars = 0
     while queue and not getattr(task, 'cancelled', False):
         if task:
             task.progress = f"Analysing SVM heap ({defined_vars}/{defined_vars + len(queue)})"
@@ -21,6 +46,9 @@ def recursively_define(heap: SvmHeap, addrs: list[int], *, task: 'AnalysisTask' 
             continue
 
         visited.add(current)
+        if current in chunk_starts:
+            continue
+
         if (hub := heap.read_pointer(current)) is None:
             continue
 
@@ -42,19 +70,19 @@ def recursively_define(heap: SvmHeap, addrs: list[int], *, task: 'AnalysisTask' 
 
             data_type = class_type.derive_type(current)
             next_object = current + data_type.width
-            aligned_next_object = next_object + (-next_object % heap.view.arch.address_size)
+            aligned_next_object = next_object + (-next_object % heap.address_size)
             queue.append(aligned_next_object)
         elif class_type.is_simple_array:
             data_type = class_type.derive_type(current)
             next_object = current + data_type.width
-            aligned_next_object = next_object + (-next_object % heap.view.arch.address_size)
+            aligned_next_object = next_object + (-next_object % heap.address_size)
             queue.append(aligned_next_object)
         elif class_type.layout and class_type.layout.is_pure_instance:
             next_object = current + data_type.width
-            aligned_next_object = next_object + (-next_object % heap.view.arch.address_size)
+            aligned_next_object = next_object + (-next_object % heap.address_size)
             queue.append(aligned_next_object)
 
-        view.define_data_var(current, data_type, name)
+        heap.view.define_data_var(current, data_type, name)
         defined_vars += 1
 
         for ref in class_type.references_from(current):

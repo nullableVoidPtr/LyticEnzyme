@@ -8,7 +8,7 @@ from math import log2, ceil
 
 from ....reader import IntIterator, EncodingReader
 from ....heap import SvmHeap
-from ...meta import SubstrateType
+from ...meta import SubstrateType, ManagedHeapObject
 from .code import CodeInfoEntryIterator
 
 if TYPE_CHECKING:
@@ -84,12 +84,11 @@ class ImageCodeInfo:
         return [('com.oracle.svm.core.code.ImageCodeInfo', image_code_info_struct)]
 
     def __init__(self, address: int):
+        cls = type(self)
+
         self.address = address
 
-        accessor = self.heap.view.typed_data_accessor(
-            self.address,
-            self.heap.view.get_type_by_name('com.oracle.svm.core.code.ImageCodeInfo'),
-        )
+        accessor = cls.typed_data_accessor(self.address)
 
         self.code_start = accessor['codeStart'].value
         self.code_end = self.code_start + accessor['codeSize'].value
@@ -98,7 +97,7 @@ class ImageCodeInfo:
         self.code_index = list(IntIterator(
             bytes(
                 get_accessor_for_member(
-                    self.heap,
+                    cls.heap,
                     accessor,
                     'codeInfoIndex'
                 )['data']
@@ -113,7 +112,7 @@ class ImageCodeInfo:
 
         self.code_info_encodings = bytes(
             get_accessor_for_member(
-                self.heap,
+                cls.heap,
                 accessor,
                 'codeInfoEncodings'
             )['data']
@@ -121,33 +120,33 @@ class ImageCodeInfo:
 
         self.frame_info_encodings = bytes(
             get_accessor_for_member(
-                self.heap,
+                cls.heap,
                 accessor,
                 'frameInfoEncodings'
             )['data']
         )
 
         from ...jdk.klass import SubstrateClass
-        class_type = SubstrateClass.for_view(self.heap)
+        class_type = SubstrateClass.for_view(cls.heap)
         self.classes = [
             None
-            if (hub := self.heap.resolve_target(ptr)) is None else
+            if (hub := cls.heap.resolve_target(ptr)) is None else
             class_type(hub)
             for ptr in get_accessor_for_member(
-                self.heap,
+                cls.heap,
                 accessor,
                 'classes'
             )['data'].value
         ]
 
         from ...jdk.string import SubstrateString
-        string_type = SubstrateString.for_view(self.heap)
+        string_type = SubstrateString.for_view(cls.heap)
         member_names = [
             None
-            if (string := self.heap.resolve_target(ptr)) is None else
+            if (string := cls.heap.resolve_target(ptr)) is None else
             string_type.read(string)
             for ptr in get_accessor_for_member(
-                self.heap,
+                cls.heap,
                 accessor,
                 'memberNames'
             )['data'].value
@@ -155,10 +154,10 @@ class ImageCodeInfo:
 
         other_strings = [
             None
-            if (string := self.heap.resolve_target(ptr)) is None else
+            if (string := cls.heap.resolve_target(ptr)) is None else
             string_type.read(string)
             for ptr in get_accessor_for_member(
-                self.heap,
+                cls.heap,
                 accessor,
                 'otherStrings'
             )['data'].value
@@ -166,7 +165,7 @@ class ImageCodeInfo:
 
         encoded_method_table = bytes(
             get_accessor_for_member(
-                self.heap,
+                cls.heap,
                 accessor,
                 'methodTable'
             )['data']
@@ -260,5 +259,5 @@ class ImageCodeInfo:
             exec_body=None,
         )
 
-class ImageCodeInfoMeta(SubstrateType, base_specialisation=ImageCodeInfo):
+class ImageCodeInfoMeta(ManagedHeapObject, SubstrateType, base_specialisation=ImageCodeInfo):
     raw_name = 'com.oracle.svm.core.code.ImageCodeInfo'

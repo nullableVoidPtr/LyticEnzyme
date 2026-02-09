@@ -7,7 +7,7 @@ from collections import Counter
 from itertools import islice
 
 from ...heap import SvmHeap
-from ..meta import SubstrateType
+from ..meta import SubstrateType, ManagedHeapObject
 from ..svm import create_hub_builder
 from ..layout_encoding import LayoutEncoding, ArrayTag
 from .object import make_object_ptr
@@ -98,7 +98,7 @@ class ReconstructorAccessor:
             )
 
     def aligned_refs(self, *, start: int = 0, end: int | None = None):
-        for offset in self.type.aligned_offsets(self.heap.view.arch.address_size, start=start, end=end):
+        for offset in self.type.aligned_offsets(self.heap.address_size, start=start, end=end):
             if (target := self.heap.read_pointer(self.address + offset)) is None:
                 continue
 
@@ -256,7 +256,7 @@ class SubstrateClass:
 
         name_offset = class_type_builder['name'].offset
         for offset in potential_companion_offsets:
-            if class_type_builder.is_covered(offset, cls.view.arch.address_size):
+            if class_type_builder.is_covered(offset, cls.heap.address_size):
                 continue
 
             if (companion := cls.heap.read_pointer(class_hub_addr + offset)) is None:
@@ -298,7 +298,7 @@ class SubstrateClass:
                 if len(string_refs := list(islice(ref_gen, 2))) != 1:
                     continue
 
-                if string_refs[0] != cls.view.arch.address_size:
+                if string_refs[0] != cls.heap.address_size:
                     continue
 
                 ref_gen = cls.heap.relative_offsets_by_index(
@@ -331,7 +331,7 @@ class SubstrateClass:
 
         is_closed = False
         for offset in class_type_builder.outref_offsets:
-            if class_type_builder.is_covered(offset, cls.view.arch.address_size):
+            if class_type_builder.is_covered(offset, cls.heap.address_size):
                 continue
 
             if (slots := cls.heap.read_pointer(class_hub_addr + offset)) is None:
@@ -394,7 +394,7 @@ class SubstrateClass:
             set(
                 offset
                 for offset in potential_component_type_offsets
-                if not class_type_builder.is_covered(offset, cls.view.arch.address_size)
+                if not class_type_builder.is_covered(offset, cls.heap.address_size)
             )
             & class_type_builder.outref_offsets
         )
@@ -474,9 +474,9 @@ class SubstrateClass:
         for offset, monitor_offset in class_type_builder.accessor(cls.heap, companion_hub).aligned_ints(2, sign=True):
             if monitor_offset == 0:
                 continue
-            if monitor_offset > companion_size - cls.view.arch.address_size:
+            if monitor_offset > companion_size - cls.heap.address_size:
                 continue
-            if monitor_offset % cls.view.arch.address_size != 0:
+            if monitor_offset % cls.heap.address_size != 0:
                 continue
 
             class_type_builder.add_member_at_offset(
@@ -564,7 +564,7 @@ class SubstrateClass:
                 slot_start,
             )
         else:
-            array_base = class_hub['openTypeWorldTypeCheckSlots'] + cls.view.arch.address_size + 4 + 4
+            array_base = class_hub['openTypeWorldTypeCheckSlots'] + cls.heap.address_size + 4 + 4
             known_hubs = [
                 class_hub,
                 class_type_builder.accessor(cls.heap, companion_hub),
@@ -629,8 +629,8 @@ class SubstrateClass:
                 TypeBuilder.named_type_reference(
                     NamedTypeReferenceClass.TypedefNamedTypeClass,
                     'org.graalvm.nativeimage.c.function.CFunctionPointer',
-                    alignment=cls.view.arch.address_size,
-                    width=cls.view.arch.address_size,
+                    alignment=cls.heap.address_size,
+                    width=cls.heap.address_size,
                 ),
                 1,
             ),
@@ -669,7 +669,7 @@ class SubstrateClass:
             hub_accessor = cls.typed_data_accessor(hub_addr)
             string = cls.heap.resolve_target(hub_accessor['name'].value)
         else:
-            for offset in range(0, 0x100, cls.view.arch.address_size):
+            for offset in range(0, 0x100, cls.heap.address_size):
                 if (string := cls.heap.read_pointer(hub_addr + offset)) is None:
                     continue
 
@@ -745,7 +745,7 @@ class SubstrateClass:
     def __init__(self, address: int):
         cls = type(self)
 
-        if not self.reconstructed:
+        if not cls.reconstructed:
             raise TypeError
 
         self.address = address
@@ -756,11 +756,11 @@ class SubstrateClass:
             self.instance_type = hub_mapping[address]
         else:
             if (string := cls.heap.resolve_target(accessor['name'].value)) is None:
-                return None
+                raise ValueError
 
             from .string import SubstrateString
             if (name := SubstrateString.for_view(cls.heap).read(string)) is None:
-                return None
+                raise ValueError
             
             self.instance_type = SubstrateType.by_name(cls.heap, name)
 
@@ -773,13 +773,12 @@ class SubstrateClass:
             cls.view.read_pointer(i)
             for i in range(
                 vtable_start,
-                vtable_start + (accessor['vtableLength'].value * cls.view.arch.address_size),
-                cls.view.arch.address_size
+                vtable_start + (accessor['vtableLength'].value * cls.heap.address_size),
+                cls.heap.address_size
             )
         ]
 
-# TODO: need to do class registry with a subclass on this second-order metaclass to avoid double work
-class SubstrateClassMeta(SubstrateType, base_specialisation=SubstrateClass):
+class SubstrateClassMeta(ManagedHeapObject, SubstrateType, base_specialisation=SubstrateClass):
     raw_name = 'java.lang.Class'
 
     array_length_member = 'vtableLength'
