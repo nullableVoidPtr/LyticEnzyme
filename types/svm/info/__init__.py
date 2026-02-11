@@ -1,14 +1,15 @@
 from binaryninja import BinaryView, TypedDataAccessor
-from binaryninja.types import TypeBuilder, NamedTypeReferenceClass
+from binaryninja.types import TypeBuilder
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar, Generator, Callable
 from dataclasses import dataclass
 from types import new_class
 from math import log2, ceil
 
 from ....reader import IntIterator, EncodingReader
 from ....heap import SvmHeap
-from ...meta import SubstrateType, ManagedHeapObject
+from ...builder import ObjectBuilder
+from ...meta import SubstrateType, ManagedTypeByAddress
 from .code import CodeInfoEntryIterator
 
 if TYPE_CHECKING:
@@ -17,6 +18,8 @@ if TYPE_CHECKING:
 
 @dataclass
 class MethodInfo:
+    id: int
+
     klass: SubstrateClass
     method_name: str
     signature: str | None = None
@@ -28,16 +31,35 @@ class MethodInfo:
     def __repr__(self):
         return f"MethodInfo({str(self)})"
 
-def get_accessor_for_member(heap: SvmHeap, accessor: TypedDataAccessor, key: str):
-    var = heap.view.get_data_var_at(
-        heap.resolve_target(accessor[key].value)
-    )
-    return heap.view.typed_data_accessor(
+def accessor_as_int(accessor: TypedDataAccessor | list[TypedDataAccessor]) -> int:
+    assert not isinstance(accessor, list)
+    return int(accessor.value)
+
+def get_accessor_for_member(heap: SvmHeap, accessor: TypedDataAccessor, key: str, inner_key: str | None = None) -> TypedDataAccessor:
+    if (ptr := heap.resolve_target(accessor_as_int(accessor[key]))) is None:
+        raise ValueError
+    if (var := heap.view.get_data_var_at(ptr)) is None:
+        raise ValueError
+
+    resolved_accessor = heap.view.typed_data_accessor(
         var.address,
         var.type,
     )
 
+    if not inner_key:
+        return resolved_accessor
+    
+    inner_accessor = resolved_accessor[inner_key]
+    assert not isinstance(inner_accessor, list)
+    return inner_accessor
+
+def get_member_encoding(heap: SvmHeap, accessor: TypedDataAccessor, key: str) -> bytes:
+    return bytes(get_accessor_for_member(heap, accessor, key, 'data'))
+
 class ImageCodeInfo:
+    heap: SvmHeap # TODO: remove when ABC is defined
+    typed_data_accessor: Callable[[int], TypedDataAccessor]
+
     address: int
 
     code_start: int
@@ -48,40 +70,36 @@ class ImageCodeInfo:
     index_granularity: int
     code_index: list[int]
 
-    classes: list[SubstrateClass]
+    classes: list[SubstrateClass | None]
     method_table: dict[int, MethodInfo]
 
     @staticmethod
     def make_type_definitions(view: BinaryView):
-        from .. import create_hub_builder
-        from ...jdk.object import make_object_ptr
+        assert view.arch is not None
 
-        image_code_info_struct = create_hub_builder(view)
-        image_code_info_struct.append(
-            TypeBuilder.named_type_reference(
-                NamedTypeReferenceClass.TypedefNamedTypeClass,
-                'org.graalvm.nativeimage.c.function.CFunctionPointer',
-                width=view.arch.address_size,
-            ),
-            'codeStart'
-        )
-        image_code_info_struct.append(TypeBuilder.int(8, False), 'codeSize')
-        image_code_info_struct.append(TypeBuilder.int(8, False), 'dataOffset')
-        image_code_info_struct.append(TypeBuilder.int(8, False), 'dataSize')
-        image_code_info_struct.append(TypeBuilder.int(8, False), 'codeAndDataMemorySize')
-        image_code_info_struct.append(make_object_ptr(view, 'java.lang.Object[]'), 'objectFields')
-        image_code_info_struct.append(make_object_ptr(view, 'byte[]'), 'codeInfoIndex')
-        image_code_info_struct.append(make_object_ptr(view, 'byte[]'), 'codeInfoEncodings')
-        image_code_info_struct.append(make_object_ptr(view, 'byte[]'), 'referenceMapEncoding')
-        image_code_info_struct.append(make_object_ptr(view, 'byte[]'), 'frameInfoEncodings')
-        image_code_info_struct.append(make_object_ptr(view, 'java.lang.Object[]'), 'objectConstants')
-        image_code_info_struct.append(make_object_ptr(view, 'java.lang.Class[]'), 'classes')
-        image_code_info_struct.append(make_object_ptr(view, 'java.lang.String[]'), 'memberNames')
-        image_code_info_struct.append(make_object_ptr(view, 'java.lang.String[]'), 'otherStrings')
-        image_code_info_struct.append(make_object_ptr(view, 'byte[]'), 'methodTable')
-        image_code_info_struct.append(TypeBuilder.int(4, True), 'methodTableFirstId')
-
-        return [('com.oracle.svm.core.code.ImageCodeInfo', image_code_info_struct)]
+        return [
+            ObjectBuilder(view, 'com.oracle.svm.core.code.ImageCodeInfo', members=[
+                (ObjectBuilder.named_typedef(
+                    'org.graalvm.nativeimage.c.function.CFunctionPointer',
+                    width=view.arch.address_size,
+                ), 'codeStart'),
+                (TypeBuilder.int(8, False), 'codeSize'),
+                (TypeBuilder.int(8, False), 'dataOffset'),
+                (TypeBuilder.int(8, False), 'dataSize'),
+                (TypeBuilder.int(8, False), 'codeAndDataMemorySize'),
+                ('java.lang.Object[]', 'objectFields'),
+                ('byte[]', 'codeInfoIndex'),
+                ('byte[]', 'codeInfoEncodings'),
+                ('byte[]', 'referenceMapEncoding'),
+                ('byte[]', 'frameInfoEncodings'),
+                ('java.lang.Object[]', 'objectConstants'),
+                ('java.lang.Class[]', 'classes'),
+                ('java.lang.String[]', 'memberNames'),
+                ('java.lang.String[]', 'otherStrings'),
+                ('byte[]', 'methodTable'),
+                (TypeBuilder.int(4, True), 'methodTableFirstId'),
+            ]),
+        ]
 
     def __init__(self, address: int):
         cls = type(self)
@@ -90,17 +108,15 @@ class ImageCodeInfo:
 
         accessor = cls.typed_data_accessor(self.address)
 
-        self.code_start = accessor['codeStart'].value
-        self.code_end = self.code_start + accessor['codeSize'].value
-        self.method_table_first_id = accessor['methodTableFirstId'].value
+        self.code_start = accessor_as_int(accessor['codeStart'])
+        self.code_end = self.code_start + accessor_as_int(accessor['codeSize'])
+        self.method_table_first_id = accessor_as_int(accessor['methodTableFirstId'])
 
         self.code_index = list(IntIterator(
-            bytes(
-                get_accessor_for_member(
-                    cls.heap,
-                    accessor,
-                    'codeInfoIndex'
-                )['data']
+            get_member_encoding(
+                cls.heap,
+                accessor,
+                'codeInfoIndex'
             )
         ))
 
@@ -110,65 +126,45 @@ class ImageCodeInfo:
             ) 
         )
 
-        self.code_info_encodings = bytes(
-            get_accessor_for_member(
-                cls.heap,
-                accessor,
-                'codeInfoEncodings'
-            )['data']
+        self.code_info_encodings = get_member_encoding(
+            cls.heap,
+            accessor,
+            'codeInfoEncodings',
         )
 
-        self.frame_info_encodings = bytes(
-            get_accessor_for_member(
+        self.frame_info_encodings = get_member_encoding(
+            cls.heap,
+            accessor,
+            'frameInfoEncodings',
+        )
+
+        T = TypeVar('T')
+        def map_member_array(key: str, transform: Callable[[int], T]) -> Generator[T | None, None, None]:
+            for ptr in get_accessor_for_member(
                 cls.heap,
                 accessor,
-                'frameInfoEncodings'
-            )['data']
-        )
+                key,
+                'data',
+            ):
+                if (resolved := cls.heap.resolve_target(accessor_as_int(ptr))) is None:
+                    yield None
+                else:
+                    yield transform(resolved)
+
 
         from ...jdk.klass import SubstrateClass
         class_type = SubstrateClass.for_view(cls.heap)
-        self.classes = [
-            None
-            if (hub := cls.heap.resolve_target(ptr)) is None else
-            class_type(hub)
-            for ptr in get_accessor_for_member(
-                cls.heap,
-                accessor,
-                'classes'
-            )['data'].value
-        ]
+        self.classes = list(map_member_array('classes', class_type))
 
         from ...jdk.string import SubstrateString
         string_type = SubstrateString.for_view(cls.heap)
-        member_names = [
-            None
-            if (string := cls.heap.resolve_target(ptr)) is None else
-            string_type.read(string)
-            for ptr in get_accessor_for_member(
-                cls.heap,
-                accessor,
-                'memberNames'
-            )['data'].value
-        ]
+        member_names: list[str | None] = list(map_member_array('memberNames', string_type.read))
+        other_strings: list[str | None] = list(map_member_array('otherStrings', string_type.read))
 
-        other_strings = [
-            None
-            if (string := cls.heap.resolve_target(ptr)) is None else
-            string_type.read(string)
-            for ptr in get_accessor_for_member(
-                cls.heap,
-                accessor,
-                'otherStrings'
-            )['data'].value
-        ]
-
-        encoded_method_table = bytes(
-            get_accessor_for_member(
-                cls.heap,
-                accessor,
-                'methodTable'
-            )['data']
+        encoded_method_table = get_member_encoding(
+            cls.heap,
+            accessor,
+            'methodTable'
         )
 
         class_index_len = 4 if len(self.classes) >= 0x10000 else 2
@@ -192,12 +188,17 @@ class ImageCodeInfo:
             method_reader.pos = class_index_len + member_index_len
 
         def read_method_table():
+            current_id = 1 + self.method_table_first_id
+
             while method_reader.pos < len(encoded_method_table):
                 try:
                     klass = self.classes[method_reader.read_int(class_index_len)]
                     method_name = member_names[method_reader.read_int(member_index_len)]
                 except StopIteration:
                     break
+
+                assert klass is not None 
+                assert method_name is not None 
 
                 signature = None
                 modifiers = None
@@ -209,15 +210,18 @@ class ImageCodeInfo:
                     modifiers = method_reader.read_int(modifier_len)
 
                 yield MethodInfo(
+                    current_id,
                     klass,
                     method_name,
                     signature,
                     modifiers,
                 )
 
+                current_id += 1
+
         self.method_table = {
-            method_id: method
-            for method_id, method in enumerate(read_method_table(), start=1 + self.method_table_first_id)
+            method.id: method
+            for method in read_method_table()
         }
 
     def lookup_code_info(self, code_addr: int):
@@ -259,5 +263,5 @@ class ImageCodeInfo:
             exec_body=None,
         )
 
-class ImageCodeInfoMeta(ManagedHeapObject, SubstrateType, base_specialisation=ImageCodeInfo):
+class ImageCodeInfoMeta(ManagedTypeByAddress, SubstrateType, base_specialisation=ImageCodeInfo):
     raw_name = 'com.oracle.svm.core.code.ImageCodeInfo'

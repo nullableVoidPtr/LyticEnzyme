@@ -1,141 +1,134 @@
 from binaryninja import BinaryView
-from binaryninja.types import Type, TypeBuilder, StructureBuilder, BaseStructure
-from binaryninja.enums import NamedTypeReferenceClass
+from binaryninja.types import Type, TypeBuilder, NamedTypeReferenceType, NamedTypeReferenceBuilder
 
+from ..builder import LyticTypeBuilder, ObjectBuilder, TypedefBuilder
 from .info import ImageCodeInfo
 
-def create_hub_builder(view: BinaryView, **kwargs) -> StructureBuilder:
-    struct = TypeBuilder.class_type()
-    struct.base_structures = [
-        BaseStructure(
-            Type.named_type_reference(
-                NamedTypeReferenceClass.ClassNamedTypeClass,
-                'java.lang.Object'
-            ),
-            offset=0,
-            width=view.arch.address_size,
+def svm_type_definitions(view: BinaryView) -> list[LyticTypeBuilder | tuple[str, Type | TypeBuilder]]:
+    assert view.arch is not None
+
+    aligned_heap_chunk_header = ObjectBuilder(
+        view,
+        'com.oracle.svm.core.genscavenge.AlignedHeapChunk$AlignedHeader',
+        base=(heap_chunk_header := ObjectBuilder(
+            view,
+            'com.oracle.svm.core.genscavenge.HeapChunk$Header',
+            raw_structure=True,
+            members=[
+                (TypeBuilder.int(8, False), 'EndOffset'),
+                (TypeBuilder.int(8, False), 'IdentityHashSalt'),
+                (TypeBuilder.int(8, True), 'OffsetToNextChunk'),
+                (TypeBuilder.int(8, True), 'OffsetToPreviousChunk'),
+                ('com.oracle.svm.core.genscavenge.Space', 'Space'),
+                (TypeBuilder.int(8, False), 'TopOffset'),
+                (TypeBuilder.int(4, True), 'PinnedObjectCount'),
+            ],
+        )),
+        members=[(TypeBuilder.bool(), 'ShouldSweepInsteadOfCompact')]
+    )
+
+    c_function_ptr = TypedefBuilder(
+        view,
+        'org.graalvm.nativeimage.c.function.CFunctionPointer',
+        TypeBuilder.pointer(view.arch, Type.void())
+    )
+
+    func_ptr_holder_struct = ObjectBuilder(
+        view,
+        'com.oracle.svm.core.FunctionPointerHolder',
+        members=[(c_function_ptr, 'functionPointer')]
+    )
+
+    isolate_thread_ref = (isolate_thread := ObjectBuilder(view, 'graal_isolatethread_t', raw_structure=True)).registered_name
+    assert isinstance(isolate_thread_ref, (NamedTypeReferenceType, NamedTypeReferenceBuilder))
+    isolate_thread_ptr = TypedefBuilder(
+        view,
+        'org.graalvm.nativeimage.IsolateThread',
+        TypeBuilder.pointer(
+            view.arch,
+            isolate_thread_ref,
         )
-    ]
-    struct.attributes["LyticEnzyme.Hub"] = kwargs.get("hub_address", "unknown")
-
-    return struct
-
-def svm_type_definitions(view: BinaryView) -> list[tuple[str, Type | TypeBuilder]]:
-    from ..jdk.object import make_object_ptr
-
-    heap_chunk_header = TypeBuilder.structure()
-    heap_chunk_header.append(TypeBuilder.int(8, False), 'EndOffset')
-    heap_chunk_header.append(TypeBuilder.int(8, False), 'IdentityHashSalt')
-    heap_chunk_header.append(TypeBuilder.int(8, True), 'OffsetToNextChunk')
-    heap_chunk_header.append(TypeBuilder.int(8, True), 'OffsetToPreviousChunk')
-    heap_chunk_header.append(make_object_ptr(view, 'com.oracle.svm.core.genscavenge.Space'), 'Space')
-    heap_chunk_header.append(TypeBuilder.int(8, False), 'TopOffset')
-    heap_chunk_header.append(TypeBuilder.int(4, True), 'PinnedObjectCount')
-
-    aligned_heap_chunk_header = TypeBuilder.structure()
-    aligned_heap_chunk_header.base_structures = [
-        BaseStructure(
-            Type.named_type_reference(
-                NamedTypeReferenceClass.StructNamedTypeClass,
-                'com.oracle.svm.core.genscavenge.HeapChunk$Header',
-            ),
-            offset=0,
-            width=heap_chunk_header.width,
-        ),
-    ]
-    aligned_heap_chunk_header.append(TypeBuilder.bool(), 'ShouldSweepInsteadOfCompact')
-
-    c_function_ptr = TypeBuilder.pointer(view.arch, TypeBuilder.void())
-    c_function_ptr.attributes['LyticEnzyme.Hub'] = 'unknown'
-
-    func_ptr_holder_struct = create_hub_builder(view)
-    func_ptr_holder_struct.append(
-        TypeBuilder.named_type_reference(
-            NamedTypeReferenceClass.TypedefNamedTypeClass,
-            'org.graalvm.nativeimage.c.function.CFunctionPointer',
-            width=view.arch.address_size,
-        ),
-        'functionPointer',
     )
 
-    isolate_thread = TypeBuilder.structure()
+    companion_struct = ObjectBuilder(view, 'com.oracle.svm.core.hub.DynamicHubCompanion', members=[
+        ('java.lang.Module', 'module'),
+        ('java.lang.Class', 'superHub'),
+        ('java.lang.String', 'sourceFileName'),
+        ('java.lang.Class', 'nestHost'),
+        ('java.lang.String', 'simpleBinaryName'),
+        ('java.lang.Object', 'declaringClass'),
+        ('java.lang.String', 'signature'),
+        ('java.lang.Class', 'arrayHub'),
+        ('java.lang.Object', 'interfacesEncoding'),
+        ('java.lang.Object', 'enumConstantsReference'),
+        (class_init_struct := ObjectBuilder(view, 'com.oracle.svm.core.classinitialization.ClassInitializationInfo', members=[
+            ('com.oracle.svm.core.FunctionPointerHolder', 'classInitializer'),
+            ('com.oracle.svm.core.classinitialization.ClassInitializationInfo$TypeReached', 'typeReached'),
+            ('com.oracle.svm.core.classinitialization.ClassInitializationInfo$InitState', 'initState'),
+            (isolate_thread_ptr, 'initThread'),
+            ('java.util.concurrent.locks.ReentrantLock', 'initLock'),
+            ('java.util.concurrent.locks.Condition', 'initCondition'),
+            (TypeBuilder.bool(), 'slowPathRequired'),
+        ]), 'classInitializationInfo'),
+        (reflection_metadata := ObjectBuilder(view, 'com.oracle.svm.core.hub.DynamicHub$ReflectionMetadata', members=[
+            (TypeBuilder.int(4, True), 'fieldsEncodingIndex'),
+            (TypeBuilder.int(4, True), 'methodsEncodingIndex'),
+            (TypeBuilder.int(4, True), 'constructorsEncodingIndex'),
+            (TypeBuilder.int(4, True), 'classFlags'),
+        ]), 'reflectionMetadata'),
+        ('com.oracle.svm.core.hub.DynamicHub$DynamicHubMetadata', 'hubMetadata'),
+        ('java.lang.Object', 'classLoader'),
+        ('java.lang.String', 'packageName'),
+        ('sun.reflect.generics.repository.ClassRepository', 'genericInfo'),
+        ('java.lang.ref.SoftReference', 'reflectionData'),
+        ('sun.reflect.annotation.AnnotationType', 'annotationType'),
+        ('java.lang.Class$AnnotationData', 'annotationData'),
+        ('java.lang.reflect.Constructor', 'cachedConstructor'),
+        (LyticTypeBuilder.named_enum('ReflectionModifiers', width=4), 'modifiers'),
+        (TypeBuilder.char(), 'additionalFlags'),
+        (TypeBuilder.bool(), 'canUnsafeAllocate'),
+    ])
 
-    isolate_thread_ptr = TypeBuilder.pointer(view.arch, TypeBuilder.named_type_reference(
-        NamedTypeReferenceClass.StructNamedTypeClass,
-        'graal_isolatethread_t',
-        width=view.arch.address_size,
-    ))
+    accessor_struct = ObjectBuilder(view, 'com.oracle.svm.core.reflect.SubstrateAccessor', members=[
+        (c_function_ptr, 'expandSignature'),
+        (c_function_ptr, 'directTarget'),
+        ('java.lang.Class', 'initializeBeforeInvoke')
+    ])
 
-    class_init_struct = create_hub_builder(view)
-    class_init_struct.append(make_object_ptr(view, 'com.oracle.svm.core.FunctionPointerHolder'), 'classInitializer')
-    class_init_struct.append(make_object_ptr(view, 'com.oracle.svm.core.classinitialization.ClassInitializationInfo$TypeReached'), 'typeReached')
-    class_init_struct.append(make_object_ptr(view, 'com.oracle.svm.core.classinitialization.ClassInitializationInfo$InitState'), 'initState')
-    class_init_struct.append(
-        TypeBuilder.named_type_reference(
-            NamedTypeReferenceClass.TypedefNamedTypeClass,
-            'org.graalvm.nativeimage.IsolateThread',
-            width=view.arch.address_size,
-        ),
-        'initThread'
-    )
-    class_init_struct.append(make_object_ptr(view, 'java.util.concurrent.locks.ReentrantLock'), 'initLock')
-    class_init_struct.append(make_object_ptr(view, 'java.util.concurrent.locks.Condition'), 'initCondition')
-    class_init_struct.append(TypeBuilder.bool(), 'slowPathRequired')
+    method_accessor_struct = ObjectBuilder(view, 'com.oracle.svm.core.reflect.SubstrateMethodAccessor', base=accessor_struct, members=[
+        ('java.lang.Class', 'receiverType'),
+        (TypeBuilder.int(4, True), 'vtableIndex'),
+        (TypeBuilder.int(4, True), 'interfaceTypeID'),
+        (TypeBuilder.bool(), 'callerSensitiveAdapter'),
+    ])
 
-    reflection_metadata = create_hub_builder(view)
-    reflection_metadata.append(TypeBuilder.int(4, True), 'fieldsEncodingIndex')
-    reflection_metadata.append(TypeBuilder.int(4, True), 'methodsEncodingIndex')
-    reflection_metadata.append(TypeBuilder.int(4, True), 'constructorsEncodingIndex')
-    reflection_metadata.append(TypeBuilder.int(4, True), 'classFlags')
-
-    companion_struct = create_hub_builder(view)
-    companion_struct.append(make_object_ptr(view, 'java.lang.Module'), 'module')
-    companion_struct.append(make_object_ptr(view, 'java.lang.Class'), 'superHub')
-    companion_struct.append(make_object_ptr(view, 'java.lang.String'), 'sourceFileName')
-    companion_struct.append(make_object_ptr(view, 'java.lang.Class'), 'nestHost')
-    companion_struct.append(make_object_ptr(view, 'java.lang.String'), 'simpleBinaryName')
-    companion_struct.append(make_object_ptr(view, 'java.lang.Object'), 'declaringClass')
-    companion_struct.append(make_object_ptr(view, 'java.lang.String'), 'signature')
-    companion_struct.append(make_object_ptr(view, 'java.lang.Class'), 'arrayHub')
-    companion_struct.append(make_object_ptr(view, 'java.lang.Object'), 'interfacesEncoding')
-    companion_struct.append(make_object_ptr(view, 'java.lang.Object'), 'enumConstantsReference')
-    companion_struct.append(make_object_ptr(view, 'com.oracle.svm.core.classinitialization.ClassInitializationInfo'), 'classInitializationInfo')
-    companion_struct.append(make_object_ptr(view, 'com.oracle.svm.core.hub.DynamicHub$ReflectionMetadata'), 'reflectionMetadata')
-    companion_struct.append(make_object_ptr(view, 'com.oracle.svm.core.hub.DynamicHub$DynamicHubMetadata'), 'hubMetadata')
-    companion_struct.append(make_object_ptr(view, 'java.lang.Object'), 'classLoader')
-    companion_struct.append(make_object_ptr(view, 'java.lang.String'), 'packageName')
-    companion_struct.append(make_object_ptr(view, 'sun.reflect.generics.repository.ClassRepository'), 'genericInfo')
-    companion_struct.append(make_object_ptr(view, 'java.lang.ref.SoftReference'), 'reflectionData')
-    companion_struct.append(make_object_ptr(view, 'sun.reflect.annotation.AnnotationType'), 'annotationType')
-    companion_struct.append(make_object_ptr(view, 'java.lang.Class$AnnotationData'), 'annotationData')
-    companion_struct.append(make_object_ptr(view, 'java.lang.reflect.Constructor'), 'cachedConstructor')
-    companion_struct.append(TypeBuilder.int(4, True), 'modifiers')
-    companion_struct.append(TypeBuilder.char(), 'additionalFlags')
-    companion_struct.append(TypeBuilder.bool(), 'canUnsafeAllocate')
-
-    interned_strings_struct = create_hub_builder(view)
-    interned_strings_struct.append(make_object_ptr(view, 'java.lang.String[]'), 'imageInternedStrings')
-
-    runtime_metadata_struct = create_hub_builder(view)
-    runtime_metadata_struct.append(make_object_ptr(view, 'byte[]'), 'encoding')
-
-    hub_support_struct = create_hub_builder(view)
-    hub_support_struct.append(make_object_ptr(view, 'byte[]'), 'referenceMapEncoding')
+    constructor_accessor_struct = ObjectBuilder(view, 'com.oracle.svm.core.reflect.SubstrateConstructorAccessor', base=accessor_struct, members=[
+        (c_function_ptr, 'factoryMethodTarget'),
+    ])
 
     return [
-        ('com.oracle.svm.core.genscavenge.HeapChunk$Header', heap_chunk_header),
-        ('com.oracle.svm.core.genscavenge.AlignedHeapChunk$AlignedHeader', aligned_heap_chunk_header),
-        ('org.graalvm.nativeimage.c.function.CFunctionPointer', c_function_ptr),
-        ('com.oracle.svm.core.FunctionPointerHolder', func_ptr_holder_struct),
-        ('graal_isolatethread_t', isolate_thread),
-        ('org.graalvm.nativeimage.IsolateThread', isolate_thread_ptr),
-        ('com.oracle.svm.core.classinitialization.ClassInitializationInfo', class_init_struct),
-        ('com.oracle.svm.core.hub.DynamicHub$ReflectionMetadata', reflection_metadata),
+        heap_chunk_header,
+        aligned_heap_chunk_header,
+        c_function_ptr,
+        func_ptr_holder_struct,
+        isolate_thread,
+        isolate_thread_ptr,
+        class_init_struct,
+        reflection_metadata,
         *ImageCodeInfo.make_type_definitions(view),
-        ('com.oracle.svm.core.hub.DynamicHubCompanion', companion_struct),
-        ('com.oracle.svm.core.jdk.ImageInternedStrings', interned_strings_struct),
-        ('com.oracle.svm.core.code.RuntimeMetadataEncoding', runtime_metadata_struct),
-        ('com.oracle.svm.core.hub.DynamicHubSupport', hub_support_struct),
+        companion_struct,
+        ObjectBuilder(view, 'com.oracle.svm.core.jdk.ImageInternedStrings', members=[
+            ('java.lang.String[]', 'imageInternedStrings'),
+        ]),
+        ObjectBuilder(view, 'com.oracle.svm.core.code.RuntimeMetadataEncoding', members=[
+            ('byte[]', 'encoding'),
+        ]),
+        ObjectBuilder(view, 'com.oracle.svm.core.hub.DynamicHubSupport', members=[
+            ('byte[]', 'referenceMapEncoding'),
+        ]),
+        accessor_struct,
+        method_accessor_struct,
+        constructor_accessor_struct,
     ]
 
-__all__ = ['create_hub_builder', 'svm_type_definitions']
+__all__ = ['svm_type_definitions']

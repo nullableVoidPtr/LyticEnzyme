@@ -3,8 +3,8 @@ class EncodingReader:
     data: bytes
     pos: int
 
-    def __init__(self, data: bytes, pos: int = 0):
-        self.data = data
+    def __init__(self, data: bytes | bytearray, pos: int = 0):
+        self.data = bytes(data)
         self.pos = pos
 
     def read_int(self, width: int, *, signed: bool = False) -> int:
@@ -34,7 +34,7 @@ class EncodingReader:
 class IntIterator(EncodingReader):
     signed: bool
 
-    def __init__(self, data: bytes, signed: bool = False):
+    def __init__(self, data: bytes | bytearray, signed: bool = False):
         super().__init__(data)
         self.signed = signed
 

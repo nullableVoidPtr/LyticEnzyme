@@ -1,4 +1,4 @@
-from binaryninja.types import TypeBuilder
+from binaryninja.types import TypeBuilder, QualifiedName, FunctionBuilder
 from binaryninja.enums import NamedTypeReferenceClass
 
 def _parse_type_name(
@@ -7,7 +7,7 @@ def _parse_type_name(
     *,
     inner: bool = False,
     safe_jni_name: bool | None = None,
-):
+) -> tuple[str, int] :
     safe_jni_name = safe_jni_name or not inner
 
     if inner:
@@ -88,7 +88,7 @@ def get_readable_type_name(type_name: str):
 def _parse_type_name_as_type(
     type_name: str,
     index = 0,
-):
+) -> tuple[TypeBuilder, int]:
     match (type_name[index], type_name[index + 1:]):
         case ('Z', _):
             return (
@@ -143,7 +143,7 @@ def _parse_type_name_as_type(
             return (
                 TypeBuilder.named_type_reference(
                     NamedTypeReferenceClass.ClassNamedTypeClass,
-                    suffix.replace('/', '.'),
+                    QualifiedName(suffix.replace('/', '.')),
                 ),
                 next_index,
             )
@@ -158,17 +158,17 @@ def _parse_type_name_as_type(
         return (
             TypeBuilder.named_type_reference(
                 NamedTypeReferenceClass.ClassNamedTypeClass,
-                inner_type + '[]',
+                QualifiedName(inner_type + '[]'),
             ),
             next_index,
         )
 
-    raise ValueError()
+    raise ValueError
 
-def _parse_method_signature(type_signature: str):
+def _parse_method_signature(type_signature: str) -> tuple[FunctionBuilder, int]:
     if not type_signature.startswith('('):
-        return None
-    
+        raise ValueError
+
     func_type = TypeBuilder.function()
 
     index = 1
@@ -190,11 +190,11 @@ def _parse_method_signature(type_signature: str):
             param_type  
         )
 
-    raise ValueError()
+    raise ValueError
 
-def parse_method_signature(type_signature: str):
-    func_type, index = _parse_method_signature(type_signature, 0)
+def parse_method_signature(type_signature: str) -> FunctionBuilder:
+    func_type, index = _parse_method_signature(type_signature)
     if index != len(type_signature):
-        raise ValueError()
+        raise ValueError
     
     return func_type

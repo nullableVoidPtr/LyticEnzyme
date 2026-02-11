@@ -13,7 +13,7 @@ def decode_reference_map(
 
     try:
         num_entries = next(encoding)
-    except StopIteration:
+    except StopIteration as e:
         raise ValueError('Truncated data') from e
 
     try:
@@ -38,3 +38,5 @@ def decode_all_reference_maps(
             return reference_map
 
         reference_map[index] = offsets
+
+    return reference_map

@@ -7,7 +7,11 @@ Breakdown of GraalVM's SubstrateVM towards analysis of Native Image (AOT) binari
 - [ ] Relative code pointers (code base) support
 - [x] Extract type information from `java.lang.Class` objects
   - [x] Native hosted method naming (partial)
+    - [ ] Test signature extraction with extended method metadata
   - [ ] Structure superclasses and inheritance
+- [ ] Extract method information
+  - [ ] `java.lang.reflect.Method` instances
+    - [ ] `com.oracle.svm.core.reflect.SubstrateAccessor`
 - [x] String recognizer and data renderer
 - [x] Heap analyser
 - [x] Function call convention fixup
@@ -16,5 +20,11 @@ Breakdown of GraalVM's SubstrateVM towards analysis of Native Image (AOT) binari
   - [x] RISC-V
   - [x] Thread register to `graal_isolatethread_t`
   - [ ] Code base register
-- [ ] Class flags and modifiers
+- [x] Class flags and modifiers
+- [ ] Java enums
 - [ ] Continuable analysis
+- [ ] LanguageRepresentation
+  - instanceof
+  - allocation
+  - type casting
+  - vtable function

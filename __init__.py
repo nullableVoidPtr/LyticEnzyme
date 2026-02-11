@@ -1,6 +1,7 @@
-from binaryninja import BinaryView, Symbol, Type, FunctionType
-from binaryninja.plugin import PluginCommand, BackgroundTaskThread
-from binaryninja.enums import SymbolType, SectionSemantics, VariableSourceType
+from binaryninja import BinaryView, Symbol, Type, FunctionType, FunctionParameter
+from binaryninja.callingconvention import CallingConvention
+from binaryninja.plugin import PluginCommand, BackgroundTask, BackgroundTaskThread
+from binaryninja.enums import SymbolType, SectionSemantics, VariableSourceType, SegmentFlag
 
 from .log import logger
 from .types import create_java_types
@@ -43,13 +44,15 @@ def find_image_interned_strings(heap: SvmHeap):
 
             return interned_strings
 
-def fixup_methods(heap: SvmHeap, image_code_info: ImageCodeInfo, *, task: 'AnalysisTask' | None = None):
+def fixup_methods(heap: SvmHeap, image_code_info: ImageCodeInfo, *, task: BackgroundTask | None = None):
     named_methods = 0
 
     heap.view.set_analysis_hold(True)
 
     if task:
         task.progress = 'Defining vtable methods...'
+
+    undefined_methods = set(image_code_info.method_table.keys())
 
     for method in (all_methods := set(
         func
@@ -63,6 +66,7 @@ def fixup_methods(heap: SvmHeap, image_code_info: ImageCodeInfo, *, task: 'Analy
 
     heap.view.update_analysis_and_wait()
 
+    vtable_methods = all_methods.copy()
     all_methods.update(
         func.start
         for func in heap.view.functions
@@ -72,8 +76,16 @@ def fixup_methods(heap: SvmHeap, image_code_info: ImageCodeInfo, *, task: 'Analy
     if task:
         task.progress = 'Fixing up known methods...'
 
+    platform = heap.view.platform
+    assert platform is not None
+
+    ccs: dict[CallingConvention, SvmCallingConvention] = {}
+    for calling_convention in platform.calling_conventions:
+        cc = SvmCallingConvention(calling_convention)
+        platform.register_calling_convention(cc)
+        ccs[calling_convention] = cc
+
     heap.view.set_analysis_hold(True)
-    ccs = {}
     for i, addr in enumerate(all_methods):
         if task:
             task.progress = f'Fixing up known methods ({i}/{len(all_methods)})...'
@@ -84,23 +96,57 @@ def fixup_methods(heap: SvmHeap, image_code_info: ImageCodeInfo, *, task: 'Analy
         if not func:
             continue
 
-        if func.calling_convention not in ccs:
-            cc = SvmCallingConvention(func.calling_convention)
-            heap.view.platform.register_calling_convention(cc)
-            ccs[func.calling_convention] = cc
+        if func.calling_convention:
+            if func.calling_convention not in ccs:
+                cc = SvmCallingConvention(func.calling_convention)
+                platform.register_calling_convention(cc)
+                ccs[func.calling_convention] = cc
 
-        calling_convention = ccs[func.calling_convention]
+            calling_convention = ccs.get(func.calling_convention, None)
+        else:
+            calling_convention = None
+
+        try:
+            method = image_code_info.lookup_method(addr)
+        except:
+            method = None
+
+        if method is None:
+            continue
+
+        parameters = None
+
+        if method:
+            func.name = str(method)
+            named_methods += 1
+            if method.id in undefined_methods:
+                undefined_methods.remove(method.id)
+
+            # TODO: construct parameters here
+
+        return_type = func.type.return_value
+        if parameters is None:
+            parameters = []
+            for i, p in enumerate(func.type.parameters):
+                if calling_convention:
+                    if p.location and p.location.source_type == VariableSourceType.RegisterVariableSourceType:
+                        if p.location.storage in [
+                            calling_convention.heap_base_register,
+                            calling_convention.thread_register,
+                        ]:
+                            continue
+
+                if i == 0 and func.start in vtable_methods:
+                    p = FunctionParameter(
+                        method.klass.instance_type.registered_name,
+                        'this',
+                    )
+
+                parameters.append(p)
 
         func.type = FunctionType.create(
-            ret=func.type.return_value,
-            params=[
-                p
-                for p in func.type.parameters
-                if not p.location or p.location.source_type != VariableSourceType.RegisterVariableSourceType or p.location.storage not in [
-                    calling_convention.heap_base_register,
-                    calling_convention.thread_register,
-                ]
-            ],
+            ret=return_type,
+            params=parameters,
             calling_convention=calling_convention,
             variable_arguments=func.type.has_variable_arguments,
             stack_adjust=func.type.stack_adjustment,
@@ -108,48 +154,42 @@ def fixup_methods(heap: SvmHeap, image_code_info: ImageCodeInfo, *, task: 'Analy
             pure=func.type.pure,
         )
 
-        try:
-            method = image_code_info.lookup_method(addr)
-        except:
-            continue
-
-        if method is None:
-            continue
-
-        func.name = str(method)
-        named_methods += 1
 
     if task:
         task.progress = f'Analysing methods...'
 
     heap.view.set_analysis_hold(False)
 
-    print(f"Finished retyping methods")
+    logger.log_info(f"Finished retyping methods")
 
     heap.view.update_analysis()
 
     logger.log_info(f"Named {named_methods} methods")
+    logger.log_info(f"Missed methodIds: {undefined_methods}")
 
     heap.view.update_analysis()
 
-def _analyse(view: BinaryView, *, task: 'AnalysisTask' | None = None):
+def _analyse(view: BinaryView, *, task: BackgroundTask | None = None):
+    assert view.arch is not None
+
     create_java_types(view)
 
     heap = SvmHeap.for_view(view)
 
     # This won't be visible in Linear view
-    view.define_data_var(
-        heap.base,
-        Type.void(),
-        Symbol(
-            SymbolType.ExternalSymbol,
+    if heap.base:
+        view.define_data_var(
             heap.base,
-            '__svm_heap_base',
-        ),
-    )
+            Type.void(),
+            Symbol(
+                SymbolType.ExternalSymbol,
+                heap.base,
+                '__svm_heap_base',
+            ),
+        )
 
     svm_internals_start = view.end
-    view.add_user_segment(svm_internals_start, 0x10, 0, 0, 0)
+    view.add_user_segment(svm_internals_start, 0x10, 0, 0, SegmentFlag(0))
     view.add_user_section(
         '.svm_synthetics',
         svm_internals_start,

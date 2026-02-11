@@ -4,6 +4,7 @@ from binaryninja.types import Type, PointerType, NamedTypeReferenceType, Structu
 from typing import Callable
 
 from ..heap import SvmHeap
+from .builder import LyticTypeBuilder
 from .svm import svm_type_definitions
 from .jdk import jdk_type_definitions
 from .meta import SubstrateType
@@ -11,50 +12,60 @@ from .meta import SubstrateType
 from .parse import get_readable_type_name, parse_method_signature
 
 REGISTER_OVERRIDES = {
-    'boolean': 'jboolean',
-    'byte': 'jbyte',
-    'char': 'jchar',
-    'short': 'jshort',
-    'int': 'jint',
-    'long': 'jlong',
-    'float': 'jfloat',
-    'double': 'jdouble',
-    'void': 'jvoid',
+    'jboolean': 'boolean',
+    'jbyte': 'byte',
+    'jchar': 'char',
+    'jshort': 'short',
+    'jint': 'int',
+    'jlong': 'long',
+    'jfloat': 'float',
+    'jdouble': 'double',
+    'jvoid': 'void',
 }
 
 def create_java_types(view: BinaryView):
-    known_types = []
-    types_list = []
+    known_types: list[str] = []
+    types_list: list[tuple[str, Type]] = []
+
     for factory in [
         jdk_type_definitions,
         svm_type_definitions,
     ]:
-        for (s, t) in factory(view):
-            _type = t.immutable_copy()
-            if s in view.types:
-                if s == 'graal_isolatethread_t':
+        for definition in factory(view):
+            if isinstance(definition, LyticTypeBuilder):
+                name = definition.name
+                _type = definition.mutable_copy()
+            else:
+                name, _type = definition
+
+            if name in view.types:
+                if name == 'graal_isolatethread_t':
                     continue
-                if s == 'java.lang.Class':
+                if name == 'java.lang.Class':
                     # TODO: more rigorous checks
                     continue
 
-            if 'LyticEnzyme.Hub' in t.attributes:
-                if s in view.types:
-                    _type.attributes['LyticEnzyme.Hub'] = t.attributes['LyticEnzyme.Hub']
+            if 'LyticEnzyme.Hub' in _type.attributes:
+                if name in view.types:
+                    _type.attributes['LyticEnzyme.Hub'] = view.get_type_by_name(name).attributes['LyticEnzyme.Hub']
 
-                known_types.append(s)
+                known_types.append(str(name))
 
-            types_list.append((s, _type))
+            types_list.append((name, _type.immutable_copy()))
 
     view.define_user_types(
         types_list,
         None,
     )
 
-    for s in known_types:
-        SubstrateType.by_name(view, REGISTER_OVERRIDES.get(s, s))
+    for name in known_types:
+        SubstrateType.by_name(
+            view,
+            REGISTER_OVERRIDES.get(name, name),
+            name if name in REGISTER_OVERRIDES else None,
+        )
 
-def is_object_array(heap: SvmHeap, array: int, element_check: Callable[bool, [int]]):
+def is_object_array(heap: SvmHeap, array: int, element_check: Callable[[int], bool]):
     view = heap.view
 
     if (length := view.read_int(array + 0xc, 0x4)) == 0:
@@ -72,7 +83,7 @@ def is_object_array(heap: SvmHeap, array: int, element_check: Callable[bool, [in
         if (ptr := view.read_pointer(current)) == 0:
             continue
 
-        if (element := heap.resolve_target(ptr)) is False:
+        if (element := heap.resolve_target(ptr)) is None:
             return False
 
         if not element_check(element):
@@ -91,6 +102,9 @@ def is_pointer_to_java_type(view: BinaryView, type: Type, name: str | None = Non
     if not isinstance(target, StructureType) or 'LyticEnzyme.Hub' not in target.attributes:
         return False
     
+    if not target.registered_name:
+        return False
+
     if name and target.registered_name.name != name:
             return False
     

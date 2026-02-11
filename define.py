@@ -1,21 +1,25 @@
-from binaryninja import Type
+from binaryninja import Type, TypedDataAccessor, BackgroundTask
 from .log import logger
 from .types.meta import SubstrateType
 from .heap import SvmHeap
 
 from typing import TYPE_CHECKING
-if TYPE_CHECKING:
-    from . import AnalysisTask
 
-def recursively_define(heap: SvmHeap, addrs: list[int], *, task: 'AnalysisTask' | None = None):
+def accessor_as_int(accessor: TypedDataAccessor | list[TypedDataAccessor]) -> int:
+    assert not isinstance(accessor, list)
+    return int(accessor)
+
+def recursively_define(heap: SvmHeap, addrs: list[int], *, task: BackgroundTask | None = None):
     defined_vars = 0
 
     chunk_starts = set()
     chunk_addr = heap.start
     while chunk_addr is not None:
+        header_type = heap.view.get_type_by_name('com.oracle.svm.core.genscavenge.HeapChunk$Header')
+        assert header_type is not None
         accessor = heap.view.typed_data_accessor(
             chunk_addr,
-            heap.view.get_type_by_name('com.oracle.svm.core.genscavenge.HeapChunk$Header'),
+            header_type,
         )
 
         heap.view.define_data_var(
@@ -27,8 +31,8 @@ def recursively_define(heap: SvmHeap, addrs: list[int], *, task: 'AnalysisTask' 
         )
         defined_vars += 1
 
-        if (next_offset := accessor['OffsetToNextChunk'].value) == 0:
-            if (next_offset := accessor['EndOffset'].value) == 0:
+        if (next_offset := accessor_as_int(accessor['OffsetToNextChunk'])) == 0:
+            if (next_offset := accessor_as_int(accessor['EndOffset'])) == 0:
                 break
         
         chunk_starts.add(chunk_addr)

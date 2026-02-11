@@ -1,33 +1,24 @@
 from binaryninja import BinaryView, Endianness
-from binaryninja.types import Type, TypeBuilder
-from binaryninja.enums import NamedTypeReferenceClass
+from binaryninja.types import Type, TypeBuilder, StructureMember
 
 from types import new_class
 
 from ...heap import SvmHeap
 from ..meta import SubstrateType
-from ..svm import create_hub_builder
+from ..builder import ObjectBuilder
 
 class SubstrateByteArray:
+    heap: SvmHeap # TODO: remove when ABC is defined
+    view: BinaryView
+
     # Can be derived, though we need it
     # for checks before we have confirmed the hub for java.lang.Class
     @staticmethod
-    def make_type_definitions(view: BinaryView) -> list[tuple[str, Type | TypeBuilder]]:
-        byte_array_struct = create_hub_builder(view)
-        byte_array_struct.add_member_at_offset('len', TypeBuilder.int(4, True), 0xc)
-        byte_array_struct.append(
-            TypeBuilder.array(
-                TypeBuilder.named_type_reference(
-                    NamedTypeReferenceClass.TypedefNamedTypeClass,
-                    'jbyte',
-                    width=1,
-                ),
-                1,
-            ),
-            'data',
-        )
-
-        return [('byte[]', byte_array_struct)]
+    def make_type_definitions(view: BinaryView):
+        return [ObjectBuilder(view, 'byte[]', members=[
+            StructureMember(Type.int(4, True), 'len', offset=0xc),
+            (TypeBuilder.array(ObjectBuilder.named_typedef('jbyte', width=1), 1), 'data'),
+        ])]
 
     @classmethod
     def is_instance(cls, addr: int, value: bytes | None = None, **kwargs):
@@ -49,6 +40,8 @@ class SubstrateByteArray:
 
     @classmethod
     def find_by_value(cls, value: bytes):
+        assert cls.view.arch is not None
+
         search_string = len(value).to_bytes(4, "little" if cls.view.arch.endianness == Endianness.LittleEndian else "big") + value
         search_offset = cls['len'].offset
 

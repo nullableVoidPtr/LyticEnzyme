@@ -1,4 +1,5 @@
-from binaryninja import BinaryView, Endianness, BinaryDataNotification, NotificationType, DataVariable
+from binaryninja import BinaryView, Endianness
+from binaryninja.types import StructureType
 
 from .reference_map import decode_reference_map
 class SvmHeap:
@@ -29,7 +30,8 @@ class SvmHeap:
         self.class_hub = class_hub
 
     @property
-    def address_size(self):
+    def address_size(self) -> int:
+        assert self.view.arch is not None
         return self.view.arch.address_size
 
     def resolve_target(self, addr: int):
@@ -46,8 +48,12 @@ class SvmHeap:
         return resolved
 
     def read_pointer(self, addr: int):
-        if (ptr := self.view.read_pointer(addr)) is None:
+        try:
+            if (ptr := self.view.read_pointer(addr)) is None:
+                return None
+        except ValueError:
             return None
+
         if ptr == 0:
             return None
 
@@ -69,6 +75,8 @@ class SvmHeap:
             yield offset
 
     def find_refs_to(self, target: int):
+        assert self.view.arch is not None
+
         target_ptr = self.make_pointer(target).to_bytes(
             self.address_size,
             "little" if self.view.arch.endianness == Endianness.LittleEndian else "big",
@@ -94,9 +102,11 @@ class SvmHeap:
         if hub in self._hub_to_reference_map_index:
             index = self._hub_to_reference_map_index[hub]
         else:
+            class_type = self.view.get_type_by_name('java.lang.Class')
+            assert class_type is not None
             index = self._hub_to_reference_map_index[hub] = self.view.typed_data_accessor(
                 hub,
-                self.view.get_type_by_name('java.lang.Class'),
+                class_type,
             )['referenceMapIndex'].value
 
         for offset in self.relative_offsets_by_index(index):
@@ -115,7 +125,8 @@ class SvmHeap:
     @classmethod
     def from_metadata(cls, view: BinaryView):
         try:
-            metadata = view.query_metadata('LyticEnzyme.heap')
+            if not isinstance(metadata := view.query_metadata('LyticEnzyme.heap'), dict):
+                return None
             if not isinstance(start := metadata['start'], int):
                 return None
             if not isinstance(end := metadata['end'], int):
@@ -133,19 +144,23 @@ class SvmHeap:
 
     # TODO: alignment masks
     @classmethod
-    def for_view(cls, view: BinaryView, allow_metadata = True):
+    def for_view(cls, view: BinaryView, allow_metadata = True) -> 'SvmHeap':
+        assert view.arch is not None
+
         if view in cls._instances:
             return cls._instances[view]
 
         if allow_metadata and (heap := cls.from_metadata(view)):
             return heap
         
-        heap_section = view.get_section_by_name(".svm_heap")
+        if (heap_section := view.get_section_by_name(".svm_heap")) is None:
+            raise ValueError('Unable to find section .svm_heap in view')
 
         search_string = b"java.lang.Class"
         search_string = len(search_string).to_bytes(4, "little" if view.arch.endianness == Endianness.LittleEndian else "big") + search_string
-
-        if (byte_array_type := view.get_type_by_name("byte[]")):
+        
+        byte_array_type = view.get_type_by_name("byte[]")
+        if isinstance(byte_array_type, StructureType):
             search_offset = byte_array_type['len'].offset
         else:
             search_offset = 0xc
@@ -192,3 +207,5 @@ class SvmHeap:
                             return heap
                     except ValueError:
                         pass
+        
+        raise ValueError

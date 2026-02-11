@@ -4,7 +4,7 @@ from ..heap import SvmHeap
 from ..types import is_pointer_to_java_type
 from ..types.jdk.string import SubstrateString
 
-def with_annotation(*components: list[list[InstructionTextToken]]):
+def with_annotation(*components: list[InstructionTextToken]):
     inner = []
     for i, l in enumerate(components):
         inner += l
@@ -18,7 +18,7 @@ def with_annotation(*components: list[list[InstructionTextToken]]):
         InstructionTextToken(InstructionTextTokenType.AnnotationToken, '}'),
     ]
 
-def with_heap_offset(relative: int, *components: list[list[InstructionTextToken]], heap_base: int):
+def with_heap_offset(relative: int, *components: list[InstructionTextToken], heap_base: int):
     return with_annotation([
         InstructionTextToken(
             InstructionTextTokenType.ExternalSymbolToken,
@@ -33,7 +33,7 @@ class SvmHeapRenderer(DataRenderer):
     def __init__(self):
         DataRenderer.__init__(self)
 
-    def perform_is_valid_for_data(self, _, view: BinaryView, addr: int, type: Type, _context: TypeContext):
+    def perform_is_valid_for_data(self, ctxt, view: BinaryView, addr: int, type: Type, context: list[TypeContext]):
         if not is_pointer_to_java_type(view, type):
             return False
 
@@ -43,7 +43,7 @@ class SvmHeapRenderer(DataRenderer):
 
         return True
 
-    def perform_get_lines_for_data(self, _, view: BinaryView, addr: int, _type: Type, prefix: list[InstructionTextToken], _width: int, _context: TypeContext):
+    def perform_get_lines_for_data(self, ctxt, view: BinaryView, addr: int, type: Type, prefix: list[InstructionTextToken], width: int, context: list[TypeContext]):
         heap = SvmHeap.for_view(view)
         if (raw := view.read_pointer(addr)) == 0:
             return [DisassemblyTextLine([
@@ -72,10 +72,10 @@ class SvmHeapRenderer(DataRenderer):
                 var_type = var_type.target(view)
 
             string_type = SubstrateString.for_view(heap)
-            if getattr(var_type.registered_name, 'name', None) == 'java.lang.String' and (string := string_type.read(target)) is not None:
+            if var_type and getattr(var_type.registered_name, 'name', None) == 'java.lang.String' and (string := string_type.read(target)) is not None:
                 line.append(InstructionTextToken(
                     InstructionTextTokenType.StringToken,
-                    f'"{string.replace('"', '\\"')}"',
+                    '"' + string.replace('"', r'\"') + '"',
                     address=target,
                 ))
                 line.append(InstructionTextToken(
@@ -96,7 +96,8 @@ class SvmHeapRenderer(DataRenderer):
                 target,
             ))
 
-        line += with_heap_offset(raw, heap_base=heap.base)
+        if heap.base is not None:
+            line += with_heap_offset(raw, heap_base=heap.base)
 
         return [DisassemblyTextLine(line, addr)]
 

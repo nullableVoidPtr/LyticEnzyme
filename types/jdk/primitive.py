@@ -1,38 +1,24 @@
 from binaryninja import BinaryView
-from binaryninja.types import Type, TypeBuilder
+from binaryninja.types import TypeBuilder
 
+from ..builder import TypedefBuilder
 from ..meta import SubstrateType
 
-def primitive_type_definitions(_: BinaryView) -> list[tuple[str, Type | TypeBuilder]]:
-    jboolean = TypeBuilder.bool()
-    jboolean.attributes['LyticEnzyme.Hub'] = 'unknown'
-    jbyte = TypeBuilder.char()
-    jbyte.attributes['LyticEnzyme.Hub'] = 'unknown'
-    jchar = TypeBuilder.int(2, False)
-    jchar.attributes['LyticEnzyme.Hub'] = 'unknown'
-    jshort = TypeBuilder.int(2, True) 
-    jshort.attributes['LyticEnzyme.Hub'] = 'unknown'
-    jint = TypeBuilder.int(4, True) 
-    jint.attributes['LyticEnzyme.Hub'] = 'unknown'
-    jlong = TypeBuilder.int(8, True) 
-    jlong.attributes['LyticEnzyme.Hub'] = 'unknown'
-    jfloat = TypeBuilder.float(4) 
-    jfloat.attributes['LyticEnzyme.Hub'] = 'unknown'
-    jdouble = TypeBuilder.float(8) 
-    jdouble.attributes['LyticEnzyme.Hub'] = 'unknown'
-    jvoid = TypeBuilder.void() 
-    jvoid.attributes['LyticEnzyme.Hub'] = 'unknown'
-
+def primitive_type_definitions(view: BinaryView):
     return [
-        ('jboolean', jboolean),
-        ('jbyte', jbyte),
-        ('jchar', jchar),
-        ('jshort', jshort),
-        ('jint', jint),
-        ('jlong', jlong),
-        ('jfloat', jfloat),
-        ('jdouble', jdouble),
-        ('jvoid', jvoid),
+        TypedefBuilder(view, name, _type)
+        for name, _type in 
+        [
+            ('jboolean', TypeBuilder.bool()),
+            ('jbyte', TypeBuilder.char()),
+            ('jchar', TypeBuilder.int(2, False)),
+            ('jshort', TypeBuilder.int(2, True)),
+            ('jint', TypeBuilder.int(4, True)),
+            ('jlong', TypeBuilder.int(8, True)),
+            ('jfloat', TypeBuilder.float(4)),
+            ('jdouble', TypeBuilder.float(8)),
+            ('jvoid', TypeBuilder.void()),
+        ]
     ]
 
 class SubstrateBooleanMeta(SubstrateType):

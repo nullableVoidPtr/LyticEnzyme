@@ -35,7 +35,7 @@ class FrameInfo:
             flags = reader.read_int(1)
             value_type = flags & 0x07
             if value_type in [1, 2, 3, 4, 6, 7]:  # Types with data
-                yield reader.get_sv()
+                yield reader.read_varint(signed=True)
 
     @staticmethod
     def decode_bytecode_index(encoded_bci: int) -> dict:
@@ -46,12 +46,12 @@ class FrameInfo:
         }
 
     @classmethod
-    def parse_uncompressed_slice(cls, reader: EncodingReader, *, info: 'ImageCodeInfo' | None = None):
+    def parse_uncompressed_slice(cls, reader: EncodingReader, *, info: 'ImageCodeInfo | None' = None):
         while (encoded_bci := reader.read_varint(signed=True)) != ENCODED_BCI_NO_CALLER:
             # TODO: use in function analysis
             num_locks = reader.read_varint()
             num_locals = reader.read_varint()
-            num_stack = reader.read_varint()
+            num_stacks = reader.read_varint()
             deopt_method_index = reader.read_varint(signed=True)
 
             cls.decode_values(reader)
@@ -70,15 +70,15 @@ class FrameInfo:
                 line_no=line_no,
                 **cls.decode_bytecode_index(encoded_bci),
                 method=method,
-                deopt_method_index=deopt_method_index,
+                deopt_method=deopt_method_index,
                 num_locals=num_locals,
-                num_stack=num_stack,
+                num_stacks=num_stacks,
                 num_locks=num_locks,
             )
 
 
     @classmethod
-    def parse_slice(cls, reader: EncodingReader, *, info: 'ImageCodeInfo' | None = None):
+    def parse_slice(cls, reader: EncodingReader, *, info: 'ImageCodeInfo | None' = None):
         if (first_value := reader.read_varint(signed=True)) == -1: # UNCOMPRESSED_FRAME_SLICE_MARKER
             yield from cls.parse_uncompressed_slice(reader, info=info)
 
@@ -124,7 +124,6 @@ class FrameInfo:
                 encoded_bci = compressed_bci
                 successor = None
 
-            # Restore position if we jumped to a shared frame
             if saved_pos is not None:
                 reader.pos = saved_pos
 

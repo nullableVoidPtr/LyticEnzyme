@@ -45,7 +45,7 @@ class CodeInfoEntry:
 
     DELTA_END_OF_TABLE = 0
 
-    def __init__(self, reader: EncodingReader, ip: int, offset: int, *, info: 'ImageCodeInfo' | None = None):
+    def __init__(self, reader: EncodingReader, ip: int, offset: int, *, info: 'ImageCodeInfo | None' = None):
         self.ip = ip
         self.offset = offset
 
@@ -79,10 +79,6 @@ class CodeInfoEntry:
             )
         else:
             self.frame_info = []
-            
-    def __repr__(self):
-        return f"CodeInfoEntry(ip={hex(self.ip)}, offset={hex(self.offset)}, frame_info_index={hex(self.frame_info_index)})"
-
 
 class CodeInfoEntryIterator:
     reader: EncodingReader

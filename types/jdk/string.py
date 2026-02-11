@@ -1,12 +1,12 @@
-from binaryninja import BinaryView
-from binaryninja.types import Type, TypeBuilder
+from binaryninja import BinaryView, TypedDataAccessor
+from binaryninja.types import TypeBuilder, StructureType
 
 from types import new_class
+from typing import Callable
 
 from ...heap import SvmHeap
 from ..meta import SubstrateType
-from ..svm import create_hub_builder
-from .object import make_object_ptr
+from ..builder import ObjectBuilder
 
 def java_hash_code(value: str):
     res = 0
@@ -16,16 +16,25 @@ def java_hash_code(value: str):
         res -= 2**32
     return res
 
-class SubstrateString:
-    @staticmethod
-    def make_type_definitions(view: BinaryView) -> list[tuple[str, Type | TypeBuilder]]:
-        string_struct = create_hub_builder(view)
-        string_struct.append(make_object_ptr(view, 'byte[]'), 'value')
-        string_struct.append(TypeBuilder.int(4, True), 'hash')
-        string_struct.append(TypeBuilder.char(), 'coder')
-        string_struct.append(TypeBuilder.bool(), 'hashIsZero')
+def accessor_as_int(accessor: TypedDataAccessor | list[TypedDataAccessor]) -> int:
+    assert not isinstance(accessor, list)
+    return int(accessor)
 
-        return [('java.lang.String', string_struct)]
+class SubstrateString:
+    heap: SvmHeap # TODO: remove when ABC is defined
+    view: BinaryView
+    typed_data_accessor: Callable[[int], TypedDataAccessor]
+
+    @staticmethod
+    def make_type_definitions(view: BinaryView):
+        return [
+            ObjectBuilder(view, 'java.lang.String', members=[
+                ('byte[]', 'value'),
+                (TypeBuilder.int(4, True), 'hash'),
+                (TypeBuilder.char(), 'coder'),
+                (TypeBuilder.bool(), 'hashIsZero'),
+            ]),
+        ]
 
     @classmethod
     def is_instance(cls, addr: int, value: str | None = None, **kwargs):
@@ -36,16 +45,16 @@ class SubstrateString:
             return False
 
         accessor = cls.typed_data_accessor(addr)
-        if value is not None and java_hash_code(value) != accessor['hash'].value:
+        if value is not None and java_hash_code(value) != accessor_as_int(accessor['hash']):
             return False
 
-        if (byte_array := cls.heap.resolve_target(accessor['value'].value)) is None:
+        if (byte_array := cls.heap.resolve_target(accessor_as_int(accessor['value']))) is None:
             return False
 
         from .bytearray import SubstrateByteArray
         return SubstrateByteArray.for_view(cls.view).is_instance(
             byte_array,
-            value.encode('utf-8' if accessor['coder'].value == 0 else 'utf-16') if value is not None else None,
+            value.encode('utf-8' if accessor_as_int(accessor['coder']) == 0 else 'utf-16') if value is not None else None,
             **kwargs,
         )
 
@@ -54,13 +63,15 @@ class SubstrateString:
     @classmethod
     def read_unchecked(cls, addr: int):
         accessor = cls.typed_data_accessor(addr)
-        if (byte_array := cls.heap.resolve_target(accessor['value'].value)) is None:
+        if (byte_array := cls.heap.resolve_target(accessor_as_int(accessor['value']))) is None:
             return None
 
-        array_type = cls.heap.view.get_type_by_name('byte[]')
-        return cls.heap.view.read(
+        array_type = cls.view.get_type_by_name('byte[]')
+        assert isinstance(array_type, StructureType)
+
+        return cls.view.read(
             byte_array + array_type['data'].offset,
-            cls.heap.view.read_int(byte_array + array_type['len'].offset, 4),
+            cls.view.read_int(byte_array + array_type['len'].offset, 4),
         ).decode()
 
     @classmethod
@@ -69,7 +80,7 @@ class SubstrateString:
             return None
 
         accessor = cls.typed_data_accessor(addr)
-        if (byte_array := cls.heap.resolve_target(accessor['value'].value)) is None:
+        if (byte_array := cls.heap.resolve_target(accessor_as_int(accessor['value']))) is None:
             return None
 
         from .bytearray import SubstrateByteArray
@@ -81,11 +92,11 @@ class SubstrateString:
             value = cls.view.read(
                 byte_array + array_type['data'].offset,
                 cls.view.read_int(byte_array + array_type['len'].offset, 4),
-            ).decode('utf-8' if accessor['coder'].value == 0 else 'utf-16')
+            ).decode('utf-8' if accessor_as_int(accessor['coder']) == 0 else 'utf-16')
         except ValueError:
             return None
         
-        if java_hash_code(value) != accessor['hash'].value:
+        if java_hash_code(value) != accessor_as_int(accessor['hash']):
             return None
 
         return value

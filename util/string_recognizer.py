@@ -1,6 +1,6 @@
 from binaryninja import StringRecognizer, CustomStringType
 from binaryninja import DerivedString, DerivedStringLocation, DerivedStringLocationType
-from binaryninja import Function, HighLevelILInstruction, Type
+from binaryninja import HighLevelILFunction, HighLevelILInstruction, Type
 
 from ..heap import SvmHeap
 from ..types import is_pointer_to_java_type
@@ -11,7 +11,7 @@ encoded_string_type = CustomStringType.register("SubstrateVM", "", "_svm")
 class SvmStringRecognizer(StringRecognizer):
     recognizer_name = "svm_heap_strings"
 
-    def is_valid_for_type(self, func: Function, type: Type):
+    def is_valid_for_type(self, func: HighLevelILFunction, type: Type):
         return is_pointer_to_java_type(func.view, type, 'java.lang.String')
 
     def recognize_constant_pointer(self, instr: HighLevelILInstruction, type: Type, val: int):
