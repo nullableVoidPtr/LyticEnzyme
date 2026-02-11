@@ -1,5 +1,5 @@
 from binaryninja import BinaryView
-from binaryninja.types import Type, TypeBuilder, IntegerType, StructureMember
+from binaryninja.types import Type, TypeBuilder, IntegerType, StructureType, StructureMember
 
 from typing import Sequence
 from collections import Counter
@@ -17,6 +17,13 @@ class TypeReconstructor(ObjectBuilder):
         super().__init__(view, name, members, **kwargs)
 
         self.covered_offsets = set()
+        struct = self.immutable_copy()
+        assert isinstance(struct, StructureType)
+        for inherited_member in struct.members_including_inherited(view):
+            member = inherited_member.member
+            offset = inherited_member.base_offset + member.offset
+            self.covered_offsets.update(range(offset, offset + member.type.width))
+
         self.outref_offsets = None
 
     def accessor(self, heap: SvmHeap, address: int):
