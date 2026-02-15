@@ -1,10 +1,10 @@
-from binaryninja import StringRecognizer, CustomStringType
-from binaryninja import DerivedString, DerivedStringLocation, DerivedStringLocationType
+from binaryninja.stringrecognizer import StringRecognizer, CustomStringType
+from binaryninja.binaryview import DerivedString, DerivedStringLocation
+from binaryninja.enums import DerivedStringLocationType
 from binaryninja import HighLevelILFunction, HighLevelILInstruction, Type
 
-from ..heap import SvmHeap
-from ..types import is_pointer_to_java_type
-from ..types.jdk.string import SubstrateString
+from .._types import is_pointer_to_java_type
+from .._types.jdk.string import SubstrateString
 
 encoded_string_type = CustomStringType.register("SubstrateVM", "", "_svm")
 

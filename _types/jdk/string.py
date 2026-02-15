@@ -1,10 +1,6 @@
 from binaryninja import BinaryView, TypedDataAccessor
 from binaryninja.types import TypeBuilder, StructureType
 
-from types import new_class
-from typing import Callable
-
-from ...heap import SvmHeap
 from ..meta import SubstrateType
 from ..builder import ObjectBuilder
 
@@ -16,14 +12,8 @@ def java_hash_code(value: str):
         res -= 2**32
     return res
 
-def accessor_as_int(accessor: TypedDataAccessor | list[TypedDataAccessor]) -> int:
-    assert not isinstance(accessor, list)
-    return int(accessor)
-
-class SubstrateString:
-    heap: SvmHeap # TODO: remove when ABC is defined
-    view: BinaryView
-    typed_data_accessor: Callable[[int], TypedDataAccessor]
+class SubstrateString(SubstrateType):
+    raw_name = 'java.lang.String'
 
     @staticmethod
     def make_type_definitions(view: BinaryView):
@@ -41,20 +31,20 @@ class SubstrateString:
         if (expected_string_hub_addr := kwargs.get('expected_string_hub_addr')) is not None:
             if cls.heap.read_pointer(addr) != expected_string_hub_addr:
                 return False
-        elif not cls._is_instance(addr, **kwargs):
+        elif not super().is_instance(addr, **kwargs):
             return False
 
         accessor = cls.typed_data_accessor(addr)
-        if value is not None and java_hash_code(value) != accessor_as_int(accessor['hash']):
+        if value is not None and java_hash_code(value) != int(accessor['hash']):
             return False
 
-        if (byte_array := cls.heap.resolve_target(accessor_as_int(accessor['value']))) is None:
+        if (byte_array := cls.heap.resolve_target(int(accessor['value']))) is None:
             return False
 
         from .bytearray import SubstrateByteArray
         return SubstrateByteArray.for_view(cls.view).is_instance(
             byte_array,
-            value.encode('utf-8' if accessor_as_int(accessor['coder']) == 0 else 'utf-16') if value is not None else None,
+            value.encode('utf-8' if int(accessor['coder']) == 0 else 'utf-16') if value is not None else None,
             **kwargs,
         )
 
@@ -63,7 +53,7 @@ class SubstrateString:
     @classmethod
     def read_unchecked(cls, addr: int):
         accessor = cls.typed_data_accessor(addr)
-        if (byte_array := cls.heap.resolve_target(accessor_as_int(accessor['value']))) is None:
+        if (byte_array := cls.heap.resolve_target(int(accessor['value']))) is None:
             return None
 
         array_type = cls.view.get_type_by_name('byte[]')
@@ -80,7 +70,7 @@ class SubstrateString:
             return None
 
         accessor = cls.typed_data_accessor(addr)
-        if (byte_array := cls.heap.resolve_target(accessor_as_int(accessor['value']))) is None:
+        if (byte_array := cls.heap.resolve_target(int(accessor['value']))) is None:
             return None
 
         from .bytearray import SubstrateByteArray
@@ -92,11 +82,11 @@ class SubstrateString:
             value = cls.view.read(
                 byte_array + array_type['data'].offset,
                 cls.view.read_int(byte_array + array_type['len'].offset, 4),
-            ).decode('utf-8' if accessor_as_int(accessor['coder']) == 0 else 'utf-16')
+            ).decode('utf-8' if int(accessor['coder']) == 0 else 'utf-16')
         except ValueError:
             return None
         
-        if java_hash_code(value) != accessor_as_int(accessor['hash']):
+        if java_hash_code(value) != int(accessor['hash']):
             return None
 
         return value
@@ -111,17 +101,3 @@ class SubstrateString:
             for addr in cls.heap.find_refs_to(byte_array):
                 if cls.is_instance(string := addr - search_offset, value):
                     yield string
-
-    @staticmethod
-    def for_view(view: BinaryView | SvmHeap):
-        return new_class(
-            name='SubstrateString',
-            kwds={
-                'metaclass': SubstrateStringMeta,
-                'view': view,
-            },
-            exec_body=None,
-        )
-
-class SubstrateStringMeta(SubstrateType, base_specialisation=SubstrateString):
-    raw_name = 'java.lang.String'

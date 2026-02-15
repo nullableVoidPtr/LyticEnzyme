@@ -46,7 +46,7 @@ class FrameInfo:
         }
 
     @classmethod
-    def parse_uncompressed_slice(cls, reader: EncodingReader, *, info: 'ImageCodeInfo | None' = None):
+    def parse_uncompressed_slice(cls, reader: EncodingReader, *, info: ImageCodeInfo | None = None):
         while (encoded_bci := reader.read_varint(signed=True)) != ENCODED_BCI_NO_CALLER:
             # TODO: use in function analysis
             num_locks = reader.read_varint()
@@ -78,7 +78,7 @@ class FrameInfo:
 
 
     @classmethod
-    def parse_slice(cls, reader: EncodingReader, *, info: 'ImageCodeInfo | None' = None):
+    def parse_slice(cls, reader: EncodingReader, *, info: ImageCodeInfo | None = None):
         if (first_value := reader.read_varint(signed=True)) == -1: # UNCOMPRESSED_FRAME_SLICE_MARKER
             yield from cls.parse_uncompressed_slice(reader, info=info)
 

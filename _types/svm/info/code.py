@@ -43,9 +43,11 @@ class CodeInfoEntry:
     frame_info: list[FrameInfo]
     frame_info_index: int | None
 
+    delta_ip: int | None
+
     DELTA_END_OF_TABLE = 0
 
-    def __init__(self, reader: EncodingReader, ip: int, offset: int, *, info: 'ImageCodeInfo | None' = None):
+    def __init__(self, reader: EncodingReader, ip: int, offset: int, *, info: ImageCodeInfo | None = None):
         self.ip = ip
         self.offset = offset
 

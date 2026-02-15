@@ -37,6 +37,6 @@ def decode_all_reference_maps(
         if (offsets := decode_reference_map(ints, reference_size=reference_size)) is None:
             return reference_map
 
-        reference_map[index] = offsets
+        reference_map[index] = list(offsets)
 
     return reference_map

@@ -3,13 +3,12 @@ from binaryninja.types import TypeBuilder
 
 from typing import TYPE_CHECKING, TypeVar, Generator, Callable
 from dataclasses import dataclass
-from types import new_class
 from math import log2, ceil
 
 from ....reader import IntIterator, EncodingReader
 from ....heap import SvmHeap
 from ...builder import ObjectBuilder
-from ...meta import SubstrateType, ManagedTypeByAddress
+from ...meta import SubstrateType
 from .code import CodeInfoEntryIterator
 
 if TYPE_CHECKING:
@@ -31,12 +30,8 @@ class MethodInfo:
     def __repr__(self):
         return f"MethodInfo({str(self)})"
 
-def accessor_as_int(accessor: TypedDataAccessor | list[TypedDataAccessor]) -> int:
-    assert not isinstance(accessor, list)
-    return int(accessor.value)
-
 def get_accessor_for_member(heap: SvmHeap, accessor: TypedDataAccessor, key: str, inner_key: str | None = None) -> TypedDataAccessor:
-    if (ptr := heap.resolve_target(accessor_as_int(accessor[key]))) is None:
+    if (ptr := heap.resolve_target(int(accessor[key]))) is None:
         raise ValueError
     if (var := heap.view.get_data_var_at(ptr)) is None:
         raise ValueError
@@ -56,9 +51,8 @@ def get_accessor_for_member(heap: SvmHeap, accessor: TypedDataAccessor, key: str
 def get_member_encoding(heap: SvmHeap, accessor: TypedDataAccessor, key: str) -> bytes:
     return bytes(get_accessor_for_member(heap, accessor, key, 'data'))
 
-class ImageCodeInfo:
-    heap: SvmHeap # TODO: remove when ABC is defined
-    typed_data_accessor: Callable[[int], TypedDataAccessor]
+class ImageCodeInfo(SubstrateType):
+    raw_name = 'com.oracle.svm.core.code.ImageCodeInfo'
 
     address: int
 
@@ -102,15 +96,15 @@ class ImageCodeInfo:
         ]
 
     def __init__(self, address: int):
-        cls = type(self)
+        super().__init__(address)
 
-        self.address = address
+        cls = type(self)
 
         accessor = cls.typed_data_accessor(self.address)
 
-        self.code_start = accessor_as_int(accessor['codeStart'])
-        self.code_end = self.code_start + accessor_as_int(accessor['codeSize'])
-        self.method_table_first_id = accessor_as_int(accessor['methodTableFirstId'])
+        self.code_start = int(accessor['codeStart'])
+        self.code_end = self.code_start + int(accessor['codeSize'])
+        self.method_table_first_id = int(accessor['methodTableFirstId'])
 
         self.code_index = list(IntIterator(
             get_member_encoding(
@@ -146,7 +140,7 @@ class ImageCodeInfo:
                 key,
                 'data',
             ):
-                if (resolved := cls.heap.resolve_target(accessor_as_int(ptr))) is None:
+                if (resolved := cls.heap.resolve_target(int(ptr))) is None:
                     yield None
                 else:
                     yield transform(resolved)
@@ -251,17 +245,3 @@ class ImageCodeInfo:
             return None
         
         return entry.frame_info[-1].method
-
-    @staticmethod
-    def for_view(view: BinaryView | SvmHeap):
-        return new_class(
-            name='ImageCodeInfo',
-            kwds={
-                'metaclass': ImageCodeInfoMeta,
-                'view': view,
-            },
-            exec_body=None,
-        )
-
-class ImageCodeInfoMeta(ManagedTypeByAddress, SubstrateType, base_specialisation=ImageCodeInfo):
-    raw_name = 'com.oracle.svm.core.code.ImageCodeInfo'

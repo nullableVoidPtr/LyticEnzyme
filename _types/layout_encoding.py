@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 from enum import IntEnum, auto
-from typing import Optional
 
 # ref: com.oracle.svm.core.hub.LayoutEncoding
 class LayoutType(IntEnum):
@@ -41,10 +40,6 @@ class LayoutEncoding:
 
     raw: int
     layout_type: LayoutType
-    instance_size: Optional[int] = None
-    array_base_offset: Optional[int] = None
-    array_index_shift: Optional[int] = None
-    array_tag: Optional[ArrayTag] = None
 
     @classmethod
     def parse(cls, encoding: int) -> 'LayoutEncoding':
@@ -61,43 +56,16 @@ class LayoutEncoding:
             return cls(raw=encoding, layout_type=LayoutType.ABSTRACT)
 
         if encoding > cls.LAST_SPECIAL_VALUE:
-            return cls(
+            return PureInstanceLayout(
                 raw=encoding,
-                layout_type=LayoutType.PURE_INSTANCE,
-                instance_size=encoding
+                instance_size=encoding,
+                layout_type=PureInstanceLayout.layout_type,
             )
 
         if encoding < cls.NEUTRAL_VALUE:
-            return cls._parse_array_like(encoding)
+            return ArrayLikeLayout.parse(encoding)
 
         raise ValueError(f"Invalid layout encoding: {encoding}")
-
-    @classmethod
-    def _parse_array_like(cls, encoding: int) -> 'LayoutEncoding':
-        unsigned = encoding & 0xFFFFFFFF
-
-        tag = (unsigned >> cls.ARRAY_TAG_SHIFT) & 0b111
-        base_offset = (encoding >> cls.ARRAY_BASE_SHIFT) & cls.ARRAY_BASE_MASK
-        index_shift = (encoding >> cls.ARRAY_INDEX_SHIFT_SHIFT) & cls.ARRAY_INDEX_SHIFT_MASK
-
-        if tag == ArrayTag.PRIMITIVE_ARRAY:
-            layout_type = LayoutType.PRIMITIVE_ARRAY
-        elif tag == ArrayTag.OBJECT_ARRAY:
-            layout_type = LayoutType.OBJECT_ARRAY
-        elif tag == ArrayTag.HYBRID_PRIMITIVE:
-            layout_type = LayoutType.HYBRID_PRIMITIVE
-        elif tag == ArrayTag.HYBRID_OBJECT:
-            layout_type = LayoutType.HYBRID_OBJECT
-        else:
-            raise ValueError(f"Invalid array tag: {tag:#05b}")
-
-        return cls(
-            raw=encoding,
-            layout_type=layout_type,
-            array_base_offset=base_offset,
-            array_index_shift=index_shift,
-            array_tag=ArrayTag(tag)
-        )
 
     @property
     def is_special(self) -> bool:
@@ -110,17 +78,36 @@ class LayoutEncoding:
     def is_primitive(self) -> bool:
         return self.layout_type == LayoutType.PRIMITIVE
 
-    @property
-    def is_pure_instance(self) -> bool:
-        return self.layout_type == LayoutType.PURE_INSTANCE
+    def __str__(self) -> str:
+        parts = [f"{self.__class__.__name__}(0x{self.raw & 0xFFFFFFFF:08x}, {self.layout_type.name}"]
+
+        if isinstance(self, PureInstanceLayout):
+            parts.append(f", size={self.instance_size}")
+        elif isinstance(self, ArrayLikeLayout):
+            parts.append(f", base={self.array_base_offset}")
+            parts.append(f", shift={self.array_index_shift}")
+            parts.append(f", scale={self.array_index_scale}")
+
+        parts.append(")")
+        return "".join(parts)
+
+    def __repr__(self) -> str:
+        return self.__str__()
+
+@dataclass
+class PureInstanceLayout(LayoutEncoding):
+    layout_type = LayoutType.PURE_INSTANCE
+    instance_size: int
+
+@dataclass
+class ArrayLikeLayout(LayoutEncoding):
+    array_tag: ArrayTag
+    array_base_offset: int
+    array_index_shift: int
 
     @property
     def is_array(self) -> bool:
         return self.layout_type in (LayoutType.PRIMITIVE_ARRAY, LayoutType.OBJECT_ARRAY)
-
-    @property
-    def is_array_like(self) -> bool:
-        return self.raw < self.NEUTRAL_VALUE
 
     @property
     def is_hybrid(self) -> bool:
@@ -143,38 +130,42 @@ class LayoutEncoding:
         return self.layout_type in (LayoutType.OBJECT_ARRAY, LayoutType.HYBRID_OBJECT)
 
     @property
-    def array_index_scale(self) -> Optional[int]:
-        if self.array_index_shift is not None:
-            return 1 << self.array_index_shift
-        return None
+    def array_index_scale(self) -> int:
+        return 1 << self.array_index_shift
 
-    def get_array_element_offset(self, index: int) -> Optional[int]:
-        if self.array_base_offset is not None and self.array_index_shift is not None:
-            return self.array_base_offset + (index << self.array_index_shift)
-        return None
+    def get_array_element_offset(self, index: int) -> int:
+        return self.array_base_offset + (index << self.array_index_shift)
 
-    def get_array_size(self, length: int, alignment: int = 8) -> Optional[int]:
-        if not self.is_array_like:
-            return None
+    def get_array_size(self, length: int, alignment: int = 8) -> int:
+        return (self.get_array_element_offset(length) + alignment - 1) & ~(alignment - 1)
 
-        end_offset = self.get_array_element_offset(length)
-        if end_offset is None:
-            return None
+    @classmethod
+    def parse(cls, encoding: int) -> 'ArrayLikeLayout':
+        if encoding >= cls.NEUTRAL_VALUE:
+            raise ValueError('LayoutEncoding is not array-like')
 
-        return (end_offset + alignment - 1) & ~(alignment - 1)
+        unsigned = encoding & 0xFFFFFFFF
 
-    def __str__(self) -> str:
-        parts = [f"LayoutEncoding(0x{self.raw & 0xFFFFFFFF:08x}, {self.layout_type.name}"]
+        tag = (unsigned >> cls.ARRAY_TAG_SHIFT) & 0b111
+        base_offset = (encoding >> cls.ARRAY_BASE_SHIFT) & cls.ARRAY_BASE_MASK
+        index_shift = (encoding >> cls.ARRAY_INDEX_SHIFT_SHIFT) & cls.ARRAY_INDEX_SHIFT_MASK
 
-        if self.is_pure_instance:
-            parts.append(f", size={self.instance_size}")
-        elif self.is_array_like:
-            parts.append(f", base={self.array_base_offset}")
-            parts.append(f", shift={self.array_index_shift}")
-            parts.append(f", scale={self.array_index_scale}")
+        match tag:
+            case ArrayTag.PRIMITIVE_ARRAY:
+                layout_type = LayoutType.PRIMITIVE_ARRAY
+            case ArrayTag.OBJECT_ARRAY:
+                layout_type = LayoutType.OBJECT_ARRAY
+            case ArrayTag.HYBRID_PRIMITIVE:
+                layout_type = LayoutType.HYBRID_PRIMITIVE
+            case ArrayTag.HYBRID_OBJECT:
+                layout_type = LayoutType.HYBRID_OBJECT
+            case _:
+                raise ValueError(f"Invalid array tag: {tag:#05b}")
 
-        parts.append(")")
-        return "".join(parts)
-
-    def __repr__(self) -> str:
-        return self.__str__()
+        return cls(
+            raw=encoding,
+            layout_type=layout_type,
+            array_tag=ArrayTag(tag),
+            array_base_offset=base_offset,
+            array_index_shift=index_shift,
+        )

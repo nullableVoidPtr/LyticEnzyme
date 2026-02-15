@@ -210,8 +210,8 @@ class SvmCallingConvention(CallingConvention):
 		result[0].state = api_obj.state
 		result[0].value = api_obj.value
 
-	def perform_get_incoming_var_for_parameter_var(self, *args):
-		return self.base.get_incoming_var_for_parameter_var(*args)
+	def perform_get_incoming_var_for_parameter_var(self, in_var, func = None):
+		return self.base.get_incoming_var_for_parameter_var(in_var, func)
 
-	def perform_get_parameter_var_for_incoming_var(self, *args):
-		return self.base.get_parameter_var_for_incoming_var(*args)
+	def perform_get_parameter_var_for_incoming_var(self, in_var, func = None):
+		return self.base.get_parameter_var_for_incoming_var(in_var, func)

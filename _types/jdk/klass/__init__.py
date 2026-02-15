@@ -1,21 +1,15 @@
-from binaryninja import BinaryView, TypedDataAccessor
-from binaryninja.types import TypeBuilder, StructureType
+from binaryninja import BinaryView
+from binaryninja.types import TypeBuilder, StructureType, StructureBuilder
 from binaryninja.architecture import InstructionTextToken
 from binaryninja.enums import InstructionTextTokenType
 
-from types import new_class
-from typing import Callable
+from typing import ClassVar, Type
 from enum import IntEnum, IntFlag, auto
 from functools import cached_property
 
-from ....heap import SvmHeap
-from ...meta import SubstrateType, ManagedTypeByAddress
+from ...meta import SubstrateType, _SubstrateEigenType
 from ...builder import ObjectBuilder, EnumBuilder
 from ..reflect import ReflectionModifiers
-
-def accessor_as_int(accessor: TypedDataAccessor | list[TypedDataAccessor]) -> int:
-    assert not isinstance(accessor, list)
-    return int(accessor)
 
 class AccessModifier(IntEnum):
     PUBLIC = auto()
@@ -48,10 +42,19 @@ class DynamicHubFlags(IntFlag):
     IS_LINKED = auto()
     IS_PROXY_CLASS = auto()
 
-class SubstrateClass:
-    heap: SvmHeap # TODO: remove when ABC is defined
-    view: BinaryView
-    typed_data_accessor: Callable[[int], TypedDataAccessor]
+class SubstrateClass(SubstrateType):
+    raw_name = 'java.lang.Class'
+
+    array_length_member = 'vtableLength'
+    array_base_member = 'vtable'
+
+    reconstructed: ClassVar[bool]
+    lazy_defined_types: ClassVar[dict[_SubstrateEigenType, int]] = {}
+
+    @classmethod
+    def __type_init__(cls):
+        assert isinstance(cls.type, StructureType)
+        cls.reconstructed = any(m.name == 'layoutEncoding' for m in cls.type.members)
 
     @staticmethod
     def make_type_definitions(view: BinaryView):
@@ -114,15 +117,15 @@ class SubstrateClass:
         cls.lazy_defined_types = {}
 
     @classmethod
-    def is_instance(cls, hub_addr: int, name: str | None = None, **kwargs):
-        if (metaclass_hub_addr := cls.heap.read_pointer(hub_addr)) is None:
+    def is_instance(cls, addr: int, name: str | None = None, **kwargs) -> bool:
+        if (metaclass_hub_addr := cls.heap.read_pointer(addr)) is None:
             return False
 
         expected_metaclass_hub_addr = cls.hub_address
 
         if expected_metaclass_hub_addr is None:
             if name == 'java.lang.Class':
-                if metaclass_hub_addr != hub_addr:
+                if metaclass_hub_addr != addr:
                     return False
             elif not cls.is_instance(metaclass_hub_addr, 'java.lang.Class', **kwargs):
                 return False
@@ -135,11 +138,11 @@ class SubstrateClass:
         from ..string import SubstrateString
         string_type = SubstrateString.for_view(cls.heap)
         if cls.reconstructed:
-            hub_accessor = cls.typed_data_accessor(hub_addr)
-            string = cls.heap.resolve_target(accessor_as_int(hub_accessor['name']))
+            hub_accessor = cls.typed_data_accessor(addr)
+            string = cls.heap.resolve_target(int(hub_accessor['name']))
         else:
             for offset in range(0, 0x100, cls.heap.address_size):
-                if (string := cls.heap.read_pointer(hub_addr + offset)) is None:
+                if (string := cls.heap.read_pointer(addr + offset)) is None:
                     continue
 
                 if (expected_string_hub := cls.heap.read_pointer(string)) is None:
@@ -159,6 +162,7 @@ class SubstrateClass:
                     continue
 
                 class_type = cls.type.mutable_copy()
+                assert isinstance(class_type, StructureBuilder)
                 class_type.add_member_at_offset(
                     'name',
                     ObjectBuilder.object_pointer(
@@ -172,47 +176,38 @@ class SubstrateClass:
             else:
                 raise ValueError()
 
-
+        assert string is not None
         if cls is None or not string_type.is_instance(
             string,
             name,
             **{
                 **kwargs,
-                'expected_string_hub_addr': kwargs.get('expected_string_hub_addr') if name != 'java.lang.String' else hub_addr,
-                'expected_byte_array_hub_addr': kwargs.get('expected_byte_array_hub_addr') if name != '[B' else hub_addr,
+                'expected_string_hub_addr': kwargs.get('expected_string_hub_addr') if name != 'java.lang.String' else addr,
+                'expected_byte_array_hub_addr': kwargs.get('expected_byte_array_hub_addr') if name != '[B' else addr,
             },
         ):
             return False
 
         if name is not None:
             if name in ['java.lang.String', '[B'] and (stype := SubstrateType.by_name(cls.heap, name)).hub_address is None:
-                stype.hub_address = hub_addr
+                stype.hub_address = addr
 
         return True
 
     @classmethod
-    def find_by_name(cls, name: str):
+    def find_by_name(cls, name: str) -> int | None:
         from ..string import SubstrateString
         for string in SubstrateString.for_view(cls.heap).find_by_value(name):
             for addr in cls.heap.find_refs_to(string):
                 if cls.is_instance(hub := addr - cls['name'].offset, name):
                     SubstrateType.by_name(cls.view, name).hub_address = hub
                     return hub
+        
+        return None
 
-    @staticmethod
-    def for_view(view: BinaryView | SvmHeap):
-        return new_class(
-            name='SubstrateClass',
-            kwds={
-                'metaclass': SubstrateClassMeta,
-                'view': view,
-            },
-            exec_body=None,
-        )
-    
-    address: int
-    instance_type: SubstrateType
+    instance_type: Type[SubstrateType]
     vtable: list
+    name: str
 
     def __init__(self, address: int):
         cls = type(self)
@@ -224,10 +219,10 @@ class SubstrateClass:
 
         accessor = cls.typed_data_accessor(self.address)
 
-        if self.address in (hub_mapping := SubstrateType.get_hub_mapping(cls.view)):
+        if self.address in (hub_mapping := cls.hub_mapping):
             self.instance_type = hub_mapping[self.address]
         else:
-            if (string := cls.heap.resolve_target(accessor_as_int(accessor['name']))) is None:
+            if (string := cls.heap.resolve_target(int(accessor['name']))) is None:
                 raise ValueError
 
             from ..string import SubstrateString
@@ -245,7 +240,7 @@ class SubstrateClass:
             cls.view.read_pointer(i)
             for i in range(
                 vtable_start,
-                vtable_start + (accessor_as_int(accessor['vtableLength']) * cls.heap.address_size),
+                vtable_start + (int(accessor['vtableLength']) * cls.heap.address_size),
                 cls.heap.address_size
             )
         ]
@@ -253,19 +248,19 @@ class SubstrateClass:
 
     @cached_property
     def flags(self) -> DynamicHubFlags:
-        return DynamicHubFlags(accessor_as_int(type(self).typed_data_accessor(self.address)['flags']))
+        return DynamicHubFlags(int(type(self).typed_data_accessor(self.address)['flags']))
 
     @cached_property
     def modifiers(self) -> ReflectionModifiers:
         cls = type(self)
         
         companion_addr = cls.heap.resolve_target(
-            accessor_as_int(cls.typed_data_accessor(self.address)['companion'])
+            int(cls.typed_data_accessor(self.address)['companion'])
         )
         assert companion_addr is not None
 
         return ReflectionModifiers(
-            accessor_as_int(SubstrateType.by_name(cls.heap, 'com.oracle.svm.core.hub.DynamicHubCompanion').typed_data_accessor(
+            int(SubstrateType.by_name(cls.heap, 'com.oracle.svm.core.hub.DynamicHubCompanion').typed_data_accessor(
                 companion_addr,
             )['modifiers']),
         )
@@ -382,18 +377,3 @@ class SubstrateClass:
                 ' '
             )
         ]
-
-class SubstrateClassMeta(ManagedTypeByAddress, SubstrateType, base_specialisation=SubstrateClass):
-    raw_name = 'java.lang.Class'
-
-    array_length_member = 'vtableLength'
-    array_base_member = 'vtable'
-
-    reconstructed: bool
-
-    def __init__(cls, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-        assert isinstance(cls.type, StructureType)
-        cls.reconstructed = any(m.name == 'layoutEncoding' for m in cls.type.members)
-        cls.lazy_defined_types = {}

@@ -1,15 +1,15 @@
-from binaryninja import BinaryView, Endianness
+from binaryninja import BinaryView
+from binaryninja.enums import Endianness
 from binaryninja.types import Type, TypeBuilder, StructureMember
 
-from types import new_class
+from typing import Iterator
 
-from ...heap import SvmHeap
 from ..meta import SubstrateType
 from ..builder import ObjectBuilder
 
-class SubstrateByteArray:
-    heap: SvmHeap # TODO: remove when ABC is defined
-    view: BinaryView
+class SubstrateByteArray(SubstrateType):
+    raw_name = '[B'
+    name = 'byte[]'
 
     # Can be derived, though we need it
     # for checks before we have confirmed the hub for java.lang.Class
@@ -21,11 +21,11 @@ class SubstrateByteArray:
         ])]
 
     @classmethod
-    def is_instance(cls, addr: int, value: bytes | None = None, **kwargs):
+    def is_instance(cls, addr: int, value: bytes | None = None, **kwargs) -> bool:
         if (expected_byte_array_hub_addr := kwargs.get('expected_byte_array_hub_addr')) is not None:
             if cls.heap.read_pointer(addr) != expected_byte_array_hub_addr:
                 return False
-        elif not cls._is_instance(addr, **kwargs):
+        elif not super().is_instance(addr, **kwargs):
             return False
 
         length = cls.view.read_int(addr + cls['len'].offset, 4)
@@ -39,7 +39,7 @@ class SubstrateByteArray:
         return cls.heap.start <= addr + cls['data'].offset + length <= cls.heap.end
 
     @classmethod
-    def find_by_value(cls, value: bytes):
+    def find_by_value(cls, value: bytes) -> Iterator[int]:
         assert cls.view.arch is not None
 
         search_string = len(value).to_bytes(4, "little" if cls.view.arch.endianness == Endianness.LittleEndian else "big") + value
@@ -52,18 +52,3 @@ class SubstrateByteArray:
         ):
             if cls.is_instance(byte_array := addr - search_offset):
                 yield byte_array
-
-    @staticmethod
-    def for_view(view: BinaryView | SvmHeap):
-        return new_class(
-            name='SubstrateByteArray',
-            kwds={
-                'metaclass': SubstrateByteArrayMeta,
-                'view': view,
-            },
-            exec_body=None,
-        )
-
-class SubstrateByteArrayMeta(SubstrateType, base_specialisation=SubstrateByteArray):
-    raw_name = '[B'
-    name = 'byte[]'

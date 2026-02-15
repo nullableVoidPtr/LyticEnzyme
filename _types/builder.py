@@ -1,19 +1,21 @@
 from binaryninja import BinaryView
-from binaryninja.types import Type, TypeBuilder, NamedTypeReferenceType, StructureBuilder, StructureMember, BaseStructure, QualifiedName, QualifiedNameType, EnumerationType, EnumerationBuilder, PointerType
+from binaryninja.types import Type, TypeBuilder, StructureBuilder, StructureMember, BaseStructure, QualifiedName, QualifiedNameType, EnumerationType, EnumerationBuilder, PointerBuilder, NamedTypeReferenceBuilder
 from binaryninja.enums import StructureVariant, NamedTypeReferenceClass
 
 from abc import ABC
-from typing import Sequence, Final
+from typing import Sequence, Generic, TypeVar
 from enum import Enum
 
-class LyticTypeBuilder(ABC):
+T = TypeVar('T', bound=TypeBuilder)
+
+class LyticTypeBuilder(ABC, Generic[T]):
     view: BinaryView
     name: QualifiedName
-    _builder: TypeBuilder
+    _builder: T
 
     ntr_class: NamedTypeReferenceClass
 
-    def __init__(self, view: BinaryView, name: QualifiedNameType, builder: TypeBuilder):
+    def __init__(self, view: BinaryView, name: QualifiedNameType, builder: T):
         self.view = view
         if not isinstance(name, QualifiedName):
             name = QualifiedName(name)
@@ -39,7 +41,7 @@ class LyticTypeBuilder(ABC):
         return self._builder.immutable_copy()
     
     @staticmethod
-    def named_typedef(name: QualifiedNameType, *args, **kwargs) -> NamedTypeReferenceType:
+    def named_typedef(name: QualifiedNameType, *args, **kwargs) -> NamedTypeReferenceBuilder:
         if not isinstance(name, QualifiedName):
             name = QualifiedName(name)
 
@@ -51,7 +53,7 @@ class LyticTypeBuilder(ABC):
         )
 
     @staticmethod
-    def named_enum(name: QualifiedNameType, *args, **kwargs) -> NamedTypeReferenceType:
+    def named_enum(name: QualifiedNameType, *args, **kwargs) -> NamedTypeReferenceBuilder:
         if not isinstance(name, QualifiedName):
             name = QualifiedName(name)
 
@@ -63,7 +65,7 @@ class LyticTypeBuilder(ABC):
         )
 
     @staticmethod
-    def object_pointer(view: BinaryView, name: QualifiedNameType) -> PointerType:
+    def object_pointer(view: BinaryView, name: QualifiedNameType) -> PointerBuilder:
         assert view.arch is not None
 
         if not isinstance(name, QualifiedName):
@@ -77,9 +79,7 @@ class LyticTypeBuilder(ABC):
             ),
         )
 
-class ObjectBuilder(LyticTypeBuilder):
-    _builder: Final[StructureBuilder]
-
+class ObjectBuilder(LyticTypeBuilder[StructureBuilder]):
     ntr_class = NamedTypeReferenceClass.ClassNamedTypeClass
 
     def __init__(
@@ -203,7 +203,7 @@ class ObjectBuilder(LyticTypeBuilder):
             **kwargs,
         )
 
-    def __getitem__(self, name: str):
+    def __getitem__(self, name: str) -> StructureMember | None:
         return self._builder[name]
 
     @property
@@ -226,9 +226,7 @@ class TypedefBuilder(LyticTypeBuilder):
 
         self._builder.attributes["LyticEnzyme.Hub"] = 'unknown' if hub_address is None else hex(hub_address)
 
-class EnumBuilder(LyticTypeBuilder):
-    _builder: Final[EnumerationBuilder]
-
+class EnumBuilder(LyticTypeBuilder[EnumerationBuilder]):
     ntr_class = NamedTypeReferenceClass.EnumNamedTypeClass
 
     def __init__(self, view: BinaryView, name: QualifiedNameType, enum: EnumerationType | EnumerationBuilder | type[Enum], *, width: int | None = None):

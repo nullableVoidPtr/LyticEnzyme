@@ -1,8 +1,9 @@
 from binaryninja import BinaryView
-from binaryninja.types import Type, TypeBuilder
 from binaryninja.enums import StructureVariant
 
-from ..builder import ObjectBuilder
+from typing import Sequence
+
+from ..builder import LyticTypeBuilder, ObjectBuilder
 from .primitive import primitive_type_definitions
 from .bytearray import SubstrateByteArray
 from .string import SubstrateString
@@ -10,7 +11,7 @@ from .module import module_type_definitions
 from .klass import SubstrateClass
 from .reflect import reflect_type_definitions
 
-def jdk_type_definitions(view: BinaryView):
+def jdk_type_definitions(view: BinaryView) -> Sequence[LyticTypeBuilder]:
 	return [
 		ObjectBuilder(
 			view,

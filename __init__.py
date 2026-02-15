@@ -4,10 +4,10 @@ from binaryninja.plugin import PluginCommand, BackgroundTask, BackgroundTaskThre
 from binaryninja.enums import SymbolType, SectionSemantics, VariableSourceType, SegmentFlag
 
 from .log import logger
-from .types import create_java_types
-from .types import is_object_array
-from .types.meta import SubstrateType
-from .types.svm.info import ImageCodeInfo
+from ._types import create_java_types
+from ._types import is_object_array
+from ._types.meta import SubstrateType
+from ._types.svm.info import ImageCodeInfo
 from .heap import SvmHeap
 from .define import recursively_define
 from .callingconvention import SvmCallingConvention
@@ -16,9 +16,12 @@ def find_image_info(heap: SvmHeap):
     code_info_type = SubstrateType.by_name(heap, 'com.oracle.svm.core.code.ImageCodeInfo')
     search_offset = code_info_type['classes'].offset
 
-    from .types.jdk.klass import SubstrateClass
+    from ._types.jdk.klass import SubstrateClass
     class_type = SubstrateClass.for_view(heap)
-    for class_array in class_type.array_type.find_instances():
+    if (array_type := class_type.array_type) is None:
+        return
+
+    for class_array in array_type.find_instances():
         if is_object_array(heap, class_array, class_type.is_instance) is None:
             continue
 
@@ -32,9 +35,12 @@ def find_image_interned_strings(heap: SvmHeap):
     interned_strings_type = SubstrateType.by_name(heap, "com.oracle.svm.core.jdk.ImageInternedStrings")
     search_offset = interned_strings_type['imageInternedStrings'].offset
 
-    from .types.jdk.string import SubstrateString
+    from ._types.jdk.string import SubstrateString
     string_type = SubstrateString.for_view(heap)
-    for string_array in string_type.array_type.find_instances():
+    if (array_type := string_type.array_type) is None:
+        return
+
+    for string_array in array_type.find_instances():
         if is_object_array(heap, string_array, string_type.is_instance) is None:
             continue
 
@@ -203,7 +209,7 @@ def _analyse(view: BinaryView, *, task: BackgroundTask | None = None):
         Symbol(SymbolType.ExternalSymbol, svm_internals_start, '__svm_isolate_thread')
     )
 
-    from .types.jdk.klass import SubstrateClass
+    from ._types.jdk.klass import SubstrateClass
     class_type = SubstrateClass.for_view(heap)
     class_type.hub_address = heap.class_hub
 
@@ -215,7 +221,7 @@ def _analyse(view: BinaryView, *, task: BackgroundTask | None = None):
     if task:
         task.progress = 'Finding instance reference maps...'
 
-    from .types.jdk.bytearray import SubstrateByteArray
+    from ._types.jdk.bytearray import SubstrateByteArray
     array_type = SubstrateByteArray.for_view(view)
     for hub_support in hub_support_type.find_instances():
         if (reference_map_obj := heap.read_pointer(hub_support + search_offset)) is None:
@@ -247,6 +253,22 @@ def _analyse(view: BinaryView, *, task: BackgroundTask | None = None):
 
     recursively_define(heap, start_addrs, task=task)
 
+    # TODO: find all packages and create mapping to components, and file under module if exists
+    # dict[Package, Component]
+    # dict[Module, Component]
+    # dict[Module, Package]
+    # TODO: restructure packages without a module
+    
+    # TODO: find all classes, determine modules they go under
+    # if possible, structure under specific package
+    # create component for class
+
+    # TODO: Iterate over roots [Package, Module, Class]
+    # TODO: give names with suffixes .$package, .$module, .class
+    # TODO: for package give names to members .versionInfo
+    # TODO: for module give names to members .descriptor, .reads, .openPackages, .exportedPackages
+    # TODO: for class give names to members .openTypeWorldTypeCheckSlots, .companion, .companion.classInitializationInfo
+
     if code_info_addr is not None:
         if task:
             task.progress = 'Parsing ImageCodeInfo...'
@@ -267,6 +289,14 @@ def analyse(view: BinaryView):
     AnalysisTask(view).start()
 
 PluginCommand.register('LyticEnzyme\\Analyse', '', analyse)
+
+def jump(view: BinaryView, address: int):
+    if (target := SvmHeap.for_view(view).read_pointer(address)) is None:
+        return
+
+    view.navigate(view.view, target)
+
+PluginCommand.register_for_address('Jump to address in SVM heap', '', jump)
 
 from .util import SvmHeapRenderer, SvmStringRecognizer
 SvmHeapRenderer().register_type_specific()

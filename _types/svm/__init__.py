@@ -1,10 +1,12 @@
 from binaryninja import BinaryView
 from binaryninja.types import Type, TypeBuilder, NamedTypeReferenceType, NamedTypeReferenceBuilder
 
+from typing import Sequence
+
 from ..builder import LyticTypeBuilder, ObjectBuilder, TypedefBuilder
 from .info import ImageCodeInfo
 
-def svm_type_definitions(view: BinaryView) -> list[LyticTypeBuilder | tuple[str, Type | TypeBuilder]]:
+def svm_type_definitions(view: BinaryView) -> Sequence[LyticTypeBuilder]:
     assert view.arch is not None
 
     aligned_heap_chunk_header = ObjectBuilder(

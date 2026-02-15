@@ -21,38 +21,38 @@ def primitive_type_definitions(view: BinaryView):
         ]
     ]
 
-class SubstrateBooleanMeta(SubstrateType):
+class SubstrateBoolean(SubstrateType):
     raw_name = 'boolean'
     name = 'jboolean'
 
-class SubstrateByteMeta(SubstrateType):
+class SubstrateByte(SubstrateType):
     raw_name = 'byte'
     name = 'jbyte'
 
-class SubstrateCharMeta(SubstrateType):
+class SubstrateChar(SubstrateType):
     raw_name = 'char'
     name = 'jchar'
 
-class SubstrateShortMeta(SubstrateType):
+class SubstrateShort(SubstrateType):
     raw_name = 'short'
     name = 'jshort'
 
-class SubstrateIntMeta(SubstrateType):
+class SubstrateInt(SubstrateType):
     raw_name = 'int'
     name = 'jint'
 
-class SubstrateLongMeta(SubstrateType):
+class SubstrateLong(SubstrateType):
     raw_name = 'long'
     name = 'jlong'
 
-class SubstrateFloatMeta(SubstrateType):
+class SubstrateFloat(SubstrateType):
     raw_name = 'float'
     name = 'jfloat'
 
-class SubstrateDoubleMeta(SubstrateType):
+class SubstrateDouble(SubstrateType):
     raw_name = 'double'
     name = 'jdouble'
 
-class SubstrateVoidMeta(SubstrateType):
+class SubstrateVoid(SubstrateType):
     raw_name = 'void'
     name = 'jvoid'

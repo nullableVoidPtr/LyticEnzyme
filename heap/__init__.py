@@ -1,5 +1,8 @@
-from binaryninja import BinaryView, Endianness
+from binaryninja import BinaryView
+from binaryninja.enums import Endianness
 from binaryninja.types import StructureType
+
+from typing import Iterator
 
 from .reference_map import decode_reference_map
 class SvmHeap:
@@ -34,7 +37,7 @@ class SvmHeap:
         assert self.view.arch is not None
         return self.view.arch.address_size
 
-    def resolve_target(self, addr: int):
+    def resolve_target(self, addr: int) -> int | None:
         # TODO: analyse reserved_bit
         addr >>= 3
         addr <<= 3
@@ -47,7 +50,7 @@ class SvmHeap:
 
         return resolved
 
-    def read_pointer(self, addr: int):
+    def read_pointer(self, addr: int) -> int | None:
         try:
             if (ptr := self.view.read_pointer(addr)) is None:
                 return None
@@ -59,10 +62,10 @@ class SvmHeap:
 
         return self.resolve_target(ptr)
 
-    def make_pointer(self, addr: int):
+    def make_pointer(self, addr: int) -> int:
         return (addr - (self.base or 0)) >> self.compression_shift
 
-    def relative_offsets_by_index(self, index: int):
+    def relative_offsets_by_index(self, index: int) -> Iterator[int]:
         if self.instance_reference_map_offset is None:
             return
         
@@ -74,7 +77,7 @@ class SvmHeap:
         ):
             yield offset
 
-    def find_refs_to(self, target: int):
+    def find_refs_to(self, target: int) -> Iterator[int]:
         assert self.view.arch is not None
 
         target_ptr = self.make_pointer(target).to_bytes(
@@ -92,7 +95,7 @@ class SvmHeap:
         ):
             yield addr
 
-    def find_refs_from(self, source: int):
+    def find_refs_from(self, source: int) -> Iterator[int]:
         if self.instance_reference_map_offset is None:
             return
         
@@ -123,7 +126,7 @@ class SvmHeap:
         })
 
     @classmethod
-    def from_metadata(cls, view: BinaryView):
+    def from_metadata(cls, view: BinaryView) -> 'SvmHeap | None':
         try:
             if not isinstance(metadata := view.query_metadata('LyticEnzyme.heap'), dict):
                 return None

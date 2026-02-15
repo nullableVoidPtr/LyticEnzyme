@@ -9,6 +9,7 @@ Breakdown of GraalVM's SubstrateVM towards analysis of Native Image (AOT) binari
   - [x] Native hosted method naming (partial)
     - [ ] Test signature extraction with extended method metadata
   - [ ] Structure superclasses and inheritance
+    - [ ] Interfaces as union
 - [ ] Extract method information
   - [ ] `java.lang.reflect.Method` instances
     - [ ] `com.oracle.svm.core.reflect.SubstrateAccessor`
@@ -22,6 +23,7 @@ Breakdown of GraalVM's SubstrateVM towards analysis of Native Image (AOT) binari
   - [ ] Code base register
 - [x] Class flags and modifiers
 - [ ] Java enums
+  - `SubstrateEnum`
 - [ ] Continuable analysis
 - [ ] LanguageRepresentation
   - instanceof

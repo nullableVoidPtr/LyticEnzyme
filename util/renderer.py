@@ -1,11 +1,14 @@
-from binaryninja import BinaryView, Type, DataRenderer, TypeContext, InstructionTextToken, InstructionTextTokenType, DisassemblyTextLine
-from binaryninja.types import NamedTypeReferenceType
+from binaryninja import BinaryView, DataRenderer, TypeContext
+from binaryninja.architecture import InstructionTextToken
+from binaryninja.function import DisassemblyTextLine
+from binaryninja.enums import InstructionTextTokenType
+from binaryninja.types import Type, NamedTypeReferenceType
 from ..heap import SvmHeap
-from ..types import is_pointer_to_java_type
-from ..types.jdk.string import SubstrateString
+from .._types import is_pointer_to_java_type
+from .._types.jdk.string import SubstrateString
 
 def with_annotation(*components: list[InstructionTextToken]):
-    inner = []
+    inner: list[InstructionTextToken] = []
     for i, l in enumerate(components):
         inner += l
         if i < len(components) - 1:
