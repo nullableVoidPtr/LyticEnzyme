@@ -1,7 +1,6 @@
 from binaryninja import Type, BackgroundTask
 from .log import logger
 from ._types.meta import SubstrateType
-from ._types.layout_encoding import PureInstanceLayout
 from .heap import SvmHeap
 
 def recursively_define(heap: SvmHeap, addrs: list[int], *, task: BackgroundTask | None = None):
@@ -17,7 +16,7 @@ def recursively_define(heap: SvmHeap, addrs: list[int], *, task: BackgroundTask 
             header_type,
         )
 
-        heap.view.define_data_var(
+        heap.view.define_user_data_var(
             chunk_addr,
             Type.named_type_from_registered_type(
                 heap.view,
@@ -61,22 +60,7 @@ def recursively_define(heap: SvmHeap, addrs: list[int], *, task: BackgroundTask 
             assert class_type.component_type.hub_address is not None
             queue.append(class_type.component_type.hub_address)
 
-        data_type = class_type.registered_name
-
-        name = None
-
-        definite_width = True
-        if class_type.name == 'java.lang.Class':
-            if stype := SubstrateType.from_hub(heap, current):
-                name = stype.name + '.class'
-
-            data_type = class_type.derive_type(current)
-        elif class_type.is_simple_array:
-            data_type = class_type.derive_type(current)
-        elif not isinstance(class_type.layout, PureInstanceLayout):
-            definite_width = False
-
-        heap.view.define_data_var(current, data_type, name)
+        definite_width = class_type.define_instance_at(current)
         defined_vars += 1
 
         for ref in class_type.references_from(current):
@@ -85,8 +69,8 @@ def recursively_define(heap: SvmHeap, addrs: list[int], *, task: BackgroundTask 
         for ref in heap.find_refs_from(current):
             queue.append(ref)
 
-        if definite_width:
-            next_object = current + data_type.width
+        if definite_width is not None:
+            next_object = current + definite_width
             aligned_next_object = next_object + (-next_object % heap.address_size)
             queue.append(aligned_next_object)
 

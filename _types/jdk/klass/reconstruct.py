@@ -478,6 +478,7 @@ def reconstruct_hub_type(heap: SvmHeap, class_hub_addr: int):
         )
 
         potential_slot_index_offsets: Counter = Counter()
+        max_slot_indices: dict[int, int] = {}
         potential_check_range_offsets: Counter = Counter()
         non_zero_slots = [False for _ in range((slot_end - slot_start) // 2)]
         for hub in search_classes():
@@ -491,6 +492,9 @@ def reconstruct_hub_type(heap: SvmHeap, class_hub_addr: int):
 
                     if index > 0 and value == start:
                         for slot_index_offset, value in hub.aligned_ints(2, start=offset + 2, sign=True):
+                            if max_slot_indices.get(slot_index_offset, 0) < value:
+                                max_slot_indices[slot_index_offset] = value
+
                             if value != index:
                                 continue
 
@@ -507,8 +511,22 @@ def reconstruct_hub_type(heap: SvmHeap, class_hub_addr: int):
             slot_index_offset,
         )
 
+        slot_length = max_slot_indices[slot_index_offset] + 1
+        if not class_type_builder.is_covered(
+            slot_start,
+            slot_length * 2
+        ):
+            class_type_builder.add_member_at_offset(
+                'closedTypeWorldTypeCheckSlots',
+                TypeBuilder.array(
+                    Type.int(2, True),
+                    slot_length,
+                ),
+                slot_start,
+            )
+
         for check_range_offset, _ in potential_check_range_offsets.most_common():
-            if check_range_offset == slot_index_offset:
+            if class_type_builder.is_covered(check_range_offset, 2):
                 continue
 
             class_type_builder.add_member_at_offset(
@@ -517,22 +535,6 @@ def reconstruct_hub_type(heap: SvmHeap, class_hub_addr: int):
                 check_range_offset,
             )
             break
-
-        slot_length = next(i for i, v in enumerate(non_zero_slots + [False]) if v == False)
-        while slot_length > 1:
-            if not class_type_builder.is_covered(slot_start, slot_length * 2):
-                break
-
-            slot_length -= 1
-                
-        class_type_builder.add_member_at_offset(
-            'closedTypeWorldTypeCheckSlots',
-            TypeBuilder.array(
-                Type.int(2, True),
-                slot_length,
-            ),
-            slot_start,
-        )
     else:
         slot_array = class_hub['openTypeWorldTypeCheckSlots']
         array_base = slot_array + heap.address_size + 4 + 4

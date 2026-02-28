@@ -14,7 +14,6 @@ from .code import CodeInfoEntryIterator
 if TYPE_CHECKING:
     from ...jdk.klass import SubstrateClass
 
-
 @dataclass
 class MethodInfo:
     id: int
@@ -140,7 +139,7 @@ class ImageCodeInfo(SubstrateType):
                 key,
                 'data',
             ):
-                if (resolved := cls.heap.resolve_target(int(ptr))) is None:
+                if (resolved := cls.heap.resolve_target(ptr)) is None:
                     yield None
                 else:
                     yield transform(resolved)

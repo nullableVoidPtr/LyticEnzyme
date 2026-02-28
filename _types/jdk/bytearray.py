@@ -4,7 +4,7 @@ from binaryninja.types import Type, TypeBuilder, StructureMember
 
 from typing import Iterator
 
-from ..meta import SubstrateType
+from ..meta import SubstrateType, typemethod
 from ..builder import ObjectBuilder
 
 class SubstrateByteArray(SubstrateType):
@@ -21,6 +21,7 @@ class SubstrateByteArray(SubstrateType):
         ])]
 
     @classmethod
+    @typemethod
     def is_instance(cls, addr: int, value: bytes | None = None, **kwargs) -> bool:
         if (expected_byte_array_hub_addr := kwargs.get('expected_byte_array_hub_addr')) is not None:
             if cls.heap.read_pointer(addr) != expected_byte_array_hub_addr:
@@ -39,6 +40,7 @@ class SubstrateByteArray(SubstrateType):
         return cls.heap.start <= addr + cls['data'].offset + length <= cls.heap.end
 
     @classmethod
+    @typemethod
     def find_by_value(cls, value: bytes) -> Iterator[int]:
         assert cls.view.arch is not None
 

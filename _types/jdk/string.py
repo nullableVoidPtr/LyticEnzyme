@@ -1,7 +1,7 @@
-from binaryninja import BinaryView, TypedDataAccessor
+from binaryninja import BinaryView
 from binaryninja.types import TypeBuilder, StructureType
 
-from ..meta import SubstrateType
+from ..meta import SubstrateType, typemethod
 from ..builder import ObjectBuilder
 
 def java_hash_code(value: str):
@@ -27,6 +27,7 @@ class SubstrateString(SubstrateType):
         ]
 
     @classmethod
+    @typemethod
     def is_instance(cls, addr: int, value: str | None = None, **kwargs):
         if (expected_string_hub_addr := kwargs.get('expected_string_hub_addr')) is not None:
             if cls.heap.read_pointer(addr) != expected_string_hub_addr:
@@ -38,22 +39,27 @@ class SubstrateString(SubstrateType):
         if value is not None and java_hash_code(value) != int(accessor['hash']):
             return False
 
-        if (byte_array := cls.heap.resolve_target(int(accessor['value']))) is None:
+        if (byte_array := cls.heap.resolve_target(accessor['value'])) is None:
             return False
 
         from .bytearray import SubstrateByteArray
-        return SubstrateByteArray.for_view(cls.view).is_instance(
+        return SubstrateByteArray.is_instance(
             byte_array,
             value.encode('utf-8' if int(accessor['coder']) == 0 else 'utf-16') if value is not None else None,
             **kwargs,
+            view=cls.heap,
         )
 
     # TODO: check if UTF16 logic works
 
     @classmethod
-    def read_unchecked(cls, addr: int):
+    @typemethod
+    def read_unchecked(cls, addr: int | None):
+        if addr is None:
+            return None
+
         accessor = cls.typed_data_accessor(addr)
-        if (byte_array := cls.heap.resolve_target(int(accessor['value']))) is None:
+        if (byte_array := cls.heap.resolve_target(accessor['value'])) is None:
             return None
 
         array_type = cls.view.get_type_by_name('byte[]')
@@ -65,12 +71,16 @@ class SubstrateString(SubstrateType):
         ).decode()
 
     @classmethod
-    def read(cls, addr: int):
+    @typemethod
+    def read(cls, addr: int | None):
+        if addr is None:
+            return None
+
         if not cls.is_instance(addr):
             return None
 
         accessor = cls.typed_data_accessor(addr)
-        if (byte_array := cls.heap.resolve_target(int(accessor['value']))) is None:
+        if (byte_array := cls.heap.resolve_target(accessor['value'])) is None:
             return None
 
         from .bytearray import SubstrateByteArray
@@ -92,12 +102,12 @@ class SubstrateString(SubstrateType):
         return value
 
     @classmethod
+    @typemethod
     def find_by_value(cls, value: str):
         search_offset = cls['value'].offset
 
         from .bytearray import SubstrateByteArray
-        array_type = SubstrateByteArray.for_view(cls.heap)
-        for byte_array in array_type.find_by_value(value.encode()):
+        for byte_array in  SubstrateByteArray.find_by_value(value.encode(), view=cls.heap):
             for addr in cls.heap.find_refs_to(byte_array):
                 if cls.is_instance(string := addr - search_offset, value):
                     yield string

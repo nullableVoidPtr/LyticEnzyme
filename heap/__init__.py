@@ -1,10 +1,11 @@
 from binaryninja import BinaryView
 from binaryninja.enums import Endianness
-from binaryninja.types import StructureType
+from binaryninja.types import Type, StructureType
 
-from typing import Iterator
+from typing import SupportsInt, Iterator
 
 from .reference_map import decode_reference_map
+from .accessor import SvmHeapAccessor
 class SvmHeap:
     _instances: dict[BinaryView, 'SvmHeap'] = {}
     view: BinaryView
@@ -37,7 +38,10 @@ class SvmHeap:
         assert self.view.arch is not None
         return self.view.arch.address_size
 
-    def resolve_target(self, addr: int) -> int | None:
+    def resolve_target(self, addr: SupportsInt) -> int | None:
+        if (addr := int(addr)) == 0:
+            return None
+
         # TODO: analyse reserved_bit
         addr >>= 3
         addr <<= 3
@@ -115,6 +119,9 @@ class SvmHeap:
         for offset in self.relative_offsets_by_index(index):
             if (target := self.read_pointer(source + offset)) is not None:
                 yield target
+
+    def accessor(self, addr: int, type: Type):
+        return SvmHeapAccessor(self, addr, type)
 
     def save_to_metadata(self):
         self.view.store_metadata('LyticEnzyme.heap', {

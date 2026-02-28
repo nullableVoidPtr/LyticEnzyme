@@ -48,47 +48,29 @@ def create_java_types(view: BinaryView):
     for name in known_types:
         SubstrateType.by_name(view, name)
 
-def is_object_array(heap: SvmHeap, array: int, element_check: Callable[[int], bool]):
-    view = heap.view
-
-    if (length := view.read_int(array + 0xc, 0x4)) == 0:
-        return False
-
-    array_start = array + 0x10
-    if not (heap.start <= array_start <= heap.end):
-        return False
-
-    array_end = array_start + (heap.address_size * length)
-    if not (heap.start <= array_end - heap.address_size <= heap.end):
-        return False
-
-    for current in range(array_start, array_end, heap.address_size):
-        if (ptr := view.read_pointer(current)) == 0:
-            continue
-
-        if (element := heap.resolve_target(ptr)) is None:
-            return False
-
-        if not element_check(element):
-            return False
-
-    return True
-
-def is_pointer_to_java_type(view: BinaryView, type: Type, name: str | None = None) -> bool:
+def extract_pointer_to_java_type(view: BinaryView, type: Type) -> Type | None:
     if not isinstance(type, PointerType):
-        return False
-    
+        return None
+
     target = type.target
     if isinstance(target, NamedTypeReferenceType):
-        target = target.target(view)
+        if (target := target.target(view)) is None:
+            # raise ValueError
+            return None
 
-    if not isinstance(target, StructureType) or 'LyticEnzyme.Hub' not in target.attributes:
-        return False
+    if 'LyticEnzyme.Hub' not in target.attributes:
+        return None
     
-    if target.registered_name is None:
+    return target
+
+def is_pointer_to_java_type(view: BinaryView, type: Type, name: str | None = None) -> bool:
+    if (target := extract_pointer_to_java_type(view, type)) is None:
+        return False
+
+    if not isinstance(target, StructureType) or target.registered_name is None:
         return False
 
     if name and target.registered_name.name != name:
-            return False
-    
+        return False
+
     return True

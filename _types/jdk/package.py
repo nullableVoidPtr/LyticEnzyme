@@ -3,7 +3,7 @@ from binaryninja.types import TypeBuilder
 
 from ..builder import ObjectBuilder
 
-def module_type_definitions(view: BinaryView):
+def package_type_definitions(view: BinaryView):
     package_struct = ObjectBuilder(view, 'java.lang.Package',
         base=(named_package_struct := ObjectBuilder(view, 'java.lang.NamedPackage',
             members=[

@@ -4,8 +4,9 @@ from binaryninja.types import Type as BNType, TypeBuilder, StructureType, Struct
 from types import new_class
 from typing import ClassVar, Self, Iterator, Type, TypeAlias, cast
 from abc import abstractmethod
+from functools import wraps
 
-from ..heap import SvmHeap
+from ..heap import SvmHeap, SvmHeapAccessor
 from .builder import ObjectBuilder
 from .layout_encoding import LayoutEncoding, PureInstanceLayout, ArrayLikeLayout
 from .builder import LyticTypeBuilder
@@ -66,8 +67,9 @@ class SubstrateTypeMeta(type):
         SubstrateTypeMeta._base_specialisations[raw_name] = specialisation
 
 class _SubstrateEigenType(type, metaclass=SubstrateTypeMeta):
-    raw_name: str
-    name: str
+    raw_name: RawTypeName
+    name: ReadableTypeName
+    display_name: str
 
     heap: SvmHeap
 
@@ -89,8 +91,8 @@ class _SubstrateEigenType(type, metaclass=SubstrateTypeMeta):
         cls,
         *args,
         view: BinaryView | SvmHeap | None = None,
-        raw_type_name: str | None = None,
-        type_name: str | None = None,
+        raw_type_name: RawTypeName | None = None,
+        type_name: ReadableTypeName | None = None,
         _type: BNType | None = None
     ):
         super().__init__(*args)
@@ -147,7 +149,12 @@ class _SubstrateEigenType(type, metaclass=SubstrateTypeMeta):
         pass
 
     _object_registry: ClassVar[dict['_SubstrateEigenType', dict[int, 'SubstrateType']]] = {}
-    def __call__(cls, address: int, *args, **kwargs):
+    def __call__(cls, address: int, *args, view: SvmHeap | BinaryView | None = None, **kwargs):
+        if view is not None:
+            cls = cls.for_view(view)
+        elif cls.view is None:
+            raise TypeError
+
         if address not in (objects := cls._object_registry.setdefault(cls, {})):
             objects[address] = super().__call__(address, *args, **kwargs)
 
@@ -329,16 +336,11 @@ class _SubstrateEigenType(type, metaclass=SubstrateTypeMeta):
         class_struct.attributes['LyticEnzyme.Hub'] = hex(addr)
         cls.type = class_struct.immutable_copy()
 
-        cls.view.define_data_var(
-            addr,
-            class_type.derive_type(addr),
-            cls.name + '.class',
-        )
         cls.hub_mapping[addr] = cast(Type[SubstrateType], cls)
 
         hub_accessor = class_type.typed_data_accessor(addr)
 
-        if (component_hub_ptr := int(hub_accessor['componentType'])) != 0 and (component_hub := cls.heap.resolve_target(component_hub_ptr)) is not None:
+        if (component_hub := cls.heap.resolve_target(hub_accessor['componentType'])) is not None:
             if (component_type := SubstrateType.from_hub(cls.heap, component_hub)) is not None:
                 if cls.component_type is None:
                     cls.component_type = component_type
@@ -346,10 +348,13 @@ class _SubstrateEigenType(type, metaclass=SubstrateTypeMeta):
                     raise ValueError
 
                 assert cls.component_type is not None
-                if cls.component_type.array_type is None:
-                    cls.component_type.array_type = cast(Type[SubstrateType], cls)
-                elif cls.component_type.array_type != cls:
-                    raise ValueError
+                # See override in com.oracle.svm.hosted.SVMHost::createHub
+                if cls.name != 'com.oracle.svm.core.heap.FillerArray':
+                    if cls.component_type.array_type is None:
+                        cls.component_type.array_type = cast(Type[SubstrateType], cls)
+                    elif cls.component_type.array_type != cls:
+                        print(cls.component_type.array_type, cls)
+                        raise ValueError
 
         if cls.layout is None:
             cls.update_layout(
@@ -357,13 +362,12 @@ class _SubstrateEigenType(type, metaclass=SubstrateTypeMeta):
                 id_hash_offset=int(hub_accessor['identityHashOffset']),
                 monitor_offset=int(hub_accessor['monitorOffset']),
             )
-        
-        if (companion := cls.heap.resolve_target(hub_accessor['companion'].value)) is not None:
-            companion_type = cls.view.get_type_by_name('com.oracle.svm.core.hub.DynamicHubCompanion')
-            assert companion_type is not None
 
-            array_hub_ptr = int(cls.view.typed_data_accessor(companion, companion_type)['arrayHub'])
-            if array_hub_ptr != 0 and (array_hub := cls.heap.resolve_target(array_hub_ptr)) is not None:
+        if (companion := cls.heap.resolve_target(hub_accessor['companion'])) is not None:
+            if (array_hub := cls.heap.resolve_target(SubstrateType.by_name(
+                cls.heap,
+                'com.oracle.svm.core.hub.DynamicHubCompanion',
+            ).typed_data_accessor(companion)['arrayHub'])) is not None:
                 if (array_type := SubstrateType.from_hub(cls.heap, array_hub)) is not None:
                     if cls.array_type is None:
                         cls.array_type = array_type
@@ -403,6 +407,18 @@ class IsSimpleArrayDescriptor:
 
         return True
 
+def typemethod(func):
+    @wraps(func)
+    def wrapper(cls: Type['SubstrateType'], *args, view: SvmHeap | BinaryView | None = None, **kwargs):
+        if view is not None:
+            cls = cls.for_view(view)
+        elif cls.view is None:
+            raise TypeError
+        
+        return func(cls, *args, **kwargs)
+    
+    return wrapper
+
 class SubstrateType(metaclass=_SubstrateEigenType):
     address: int
 
@@ -423,31 +439,93 @@ class SubstrateType(metaclass=_SubstrateEigenType):
                 SubstrateTypeMeta.register_alias(raw_name, name)
 
     @classmethod
+    @typemethod
     def is_instance(cls, addr: int, **kwargs) -> bool:
+        from .jdk.klass import SubstrateClass
+
         if (data_var := cls.view.get_data_var_at(addr)) and data_var.type == cls.type:
             return True
         
         if (hub_addr := cls.heap.read_pointer(addr)) is None:
             return False
 
-        if hub_addr == cls.hub_address:
-            return True
+        if cls.hub_address is None:
+            if not SubstrateClass.is_instance(hub_addr, cls.raw_name, **kwargs, view=cls.heap):
+                return False
+            
+            cls.hub_address = hub_addr
+
+        if hub_addr != cls.hub_address:
+            return False
+
+        if cls.layout is None and SubstrateClass.for_view(cls.heap).reconstructed:
+            raise ValueError
         
-        from .jdk.klass import SubstrateClass
-        return SubstrateClass.for_view(cls.view).is_instance(hub_addr, cls.raw_name, **kwargs)
+        if not isinstance(cls.layout, ArrayLikeLayout) or not cls.layout.is_object_array:
+            return True
+
+        if (component_type := cls.component_type) is None:
+            raise ValueError
+
+        # TODO use cls.array_len_member
+        if (length := cls.view.read_int(addr + 0xc, 0x4)) == 0:
+            return False
+
+        # TODO use cls.array_base_member
+        array_start = addr + 0x10
+        array_end = array_start + (cls.heap.address_size * length)
+        if not (cls.heap.start <= array_end - cls.heap.address_size <= cls.heap.end):
+            return False
+
+        for current in range(array_start, array_end, cls.heap.address_size):
+            if (ptr := cls.view.read_pointer(current)) == 0:
+                continue
+
+            if (element := cls.heap.resolve_target(ptr)) is None:
+                return False
+
+            if not component_type.is_instance(element):
+                return False
+
+        return True
 
     @classmethod
+    @typemethod
+    def define_instance_at(cls, addr: int) -> int | None:
+        definite_width = None
+
+        _type = cls.registered_name
+        if cls.is_simple_array:
+            _type = cls.derive_type(addr)
+            definite_width = _type.width
+        elif isinstance(cls.layout, PureInstanceLayout):
+            definite_width = _type.width
+
+        cls.view.define_user_data_var(addr, _type)
+
+        return definite_width
+
+    @classmethod
+    @typemethod
     def typed_data_accessor(cls, addr: int) -> TypedDataAccessor:
         return cls.view.typed_data_accessor(addr, cls.type)
 
     @classmethod
+    @typemethod
+    def accessor(cls, addr: int) -> SvmHeapAccessor:
+        return cls.heap.accessor(addr, cls.type)
+
+    @classmethod
+    @typemethod
     def find_hub(cls) -> bool:
         if cls.hub_address is not None:
             return True
 
         from .jdk.klass import SubstrateClass
-        hub = SubstrateClass.for_view(cls.heap).find_by_name(cls.raw_name)
-        if not hub:
+        if not (hub := SubstrateClass.find_by_name(
+            cls.raw_name,
+            view=cls.heap,
+        )):
             return False
         
         cls.hub_address = hub
@@ -455,13 +533,17 @@ class SubstrateType(metaclass=_SubstrateEigenType):
         return True
 
     @classmethod
+    @typemethod
     def find_instances(cls) -> Iterator[int]:
         if not (hub := cls.hub_address):
             return
         
-        yield from cls.heap.find_refs_to(hub)
+        for addr in cls.heap.find_refs_to(hub):
+            if cls.is_instance(addr):
+                yield addr
 
     @classmethod
+    @typemethod
     def derive_type(cls, addr: int) -> StructureBuilder:
         data_len = int(cls.typed_data_accessor(addr)[cls.array_length_member])
 
@@ -491,6 +573,7 @@ class SubstrateType(metaclass=_SubstrateEigenType):
         return derived_type
 
     @classmethod
+    @typemethod
     def references_from(cls, addr: int) -> Iterator[int]:
         from . import is_pointer_to_java_type
 
@@ -533,7 +616,7 @@ class SubstrateType(metaclass=_SubstrateEigenType):
                 int(cls.typed_data_accessor(addr)[cls.array_length_member]),
             )
         ):
-            if (ref := cls.heap.resolve_target(int(ptr))) is not None:
+            if (ref := cls.heap.resolve_target(ptr)) is not None:
                 yield ref
 
     @classmethod
@@ -552,7 +635,7 @@ class SubstrateType(metaclass=_SubstrateEigenType):
     def from_hub(heap: SvmHeap, hub: int) -> Type['SubstrateType'] | None:
         from .jdk.klass import SubstrateClass
         try:
-            return SubstrateClass.for_view(heap)(hub).instance_type
+            return SubstrateClass(hub, view=heap).instance_type
         except ValueError:
             return None
 

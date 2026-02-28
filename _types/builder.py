@@ -7,7 +7,6 @@ from typing import Sequence, Generic, TypeVar
 from enum import Enum
 
 T = TypeVar('T', bound=TypeBuilder)
-
 class LyticTypeBuilder(ABC, Generic[T]):
     view: BinaryView
     name: QualifiedName
@@ -232,6 +231,7 @@ class EnumBuilder(LyticTypeBuilder[EnumerationBuilder]):
     def __init__(self, view: BinaryView, name: QualifiedNameType, enum: EnumerationType | EnumerationBuilder | type[Enum], *, width: int | None = None):
         if isinstance(enum, (EnumerationType, EnumerationBuilder)):
             builder = enum.mutable_copy()
+            assert isinstance(builder, EnumerationBuilder)
         else:
             builder = TypeBuilder.enumeration(
                 view.arch,

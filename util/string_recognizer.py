@@ -18,7 +18,7 @@ class SvmStringRecognizer(StringRecognizer):
         if not is_pointer_to_java_type(instr.function.view, type, 'java.lang.String'):
             return None
 
-        if (result := SubstrateString.for_view(instr.function.view).read(val)) is None:
+        if (result := SubstrateString.read(val, view=instr.function.view)) is None:
             return None
 
         loc = DerivedStringLocation(DerivedStringLocationType.DataBackedStringLocation, val, len(result) + 3)

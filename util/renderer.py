@@ -74,8 +74,7 @@ class SvmHeapRenderer(DataRenderer):
             if isinstance(var_type, NamedTypeReferenceType):
                 var_type = var_type.target(view)
 
-            string_type = SubstrateString.for_view(heap)
-            if var_type and getattr(var_type.registered_name, 'name', None) == 'java.lang.String' and (string := string_type.read(target)) is not None:
+            if var_type and getattr(var_type.registered_name, 'name', None) == 'java.lang.String' and (string := SubstrateString.read(target, view=heap)) is not None:
                 line.append(InstructionTextToken(
                     InstructionTextTokenType.StringToken,
                     '"' + string.replace('"', r'\"') + '"',
