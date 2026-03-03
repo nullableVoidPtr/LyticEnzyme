@@ -6,6 +6,7 @@ from typing import SupportsInt, Iterator
 
 from .reference_map import decode_reference_map
 from .accessor import SvmHeapAccessor
+from .listener import SvmHeapListener
 class SvmHeap:
     _instances: dict[BinaryView, 'SvmHeap'] = {}
     view: BinaryView
@@ -32,6 +33,8 @@ class SvmHeap:
         self._hub_to_reference_map_index = {}
         
         self.class_hub = class_hub
+
+        self.view.register_notification(SvmHeapListener())
 
     @property
     def address_size(self) -> int:
@@ -81,6 +84,19 @@ class SvmHeap:
         ):
             yield offset
 
+    def relative_offsets_by_type(self, hub_address: int) -> Iterator[int]:
+        if hub_address in self._hub_to_reference_map_index:
+            index = self._hub_to_reference_map_index[hub_address]
+        else:
+            class_type = self.view.get_type_by_name('java.lang.Class')
+            assert class_type is not None
+            index = self._hub_to_reference_map_index[hub_address] = self.view.typed_data_accessor(
+                hub_address,
+                class_type,
+            )['referenceMapIndex'].value
+
+        yield from self.relative_offsets_by_index(index)
+
     def find_refs_to(self, target: int) -> Iterator[int]:
         assert self.view.arch is not None
 
@@ -99,26 +115,16 @@ class SvmHeap:
         ):
             yield addr
 
-    def find_refs_from(self, source: int) -> Iterator[int]:
+    def find_refs_from(self, source: int) -> Iterator[tuple[int, int]]:
         if self.instance_reference_map_offset is None:
             return
         
-        if (hub := self.read_pointer(source)) is None:
+        if (hub_address := self.read_pointer(source)) is None:
             return
 
-        if hub in self._hub_to_reference_map_index:
-            index = self._hub_to_reference_map_index[hub]
-        else:
-            class_type = self.view.get_type_by_name('java.lang.Class')
-            assert class_type is not None
-            index = self._hub_to_reference_map_index[hub] = self.view.typed_data_accessor(
-                hub,
-                class_type,
-            )['referenceMapIndex'].value
-
-        for offset in self.relative_offsets_by_index(index):
+        for offset in self.relative_offsets_by_type(hub_address):
             if (target := self.read_pointer(source + offset)) is not None:
-                yield target
+                yield (source + offset, target)
 
     def accessor(self, addr: int, type: Type):
         return SvmHeapAccessor(self, addr, type)

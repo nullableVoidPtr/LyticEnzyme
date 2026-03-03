@@ -8,6 +8,7 @@ from enum import IntEnum, IntFlag, auto
 from functools import cached_property
 
 from ....heap import SvmHeapAccessor
+from ....component import LazyComponent
 from ...meta import SubstrateType, _SubstrateEigenType, typemethod
 from ...builder import ObjectBuilder, EnumBuilder
 from ..reflect import ReflectionModifiers
@@ -72,7 +73,7 @@ class SubstrateVTable:
         self.names[key] = name
 
     def update_type(self):
-        vtable_type_name = f"{self.klass.type_name}$VTable"
+        vtable_type_name = f"{self.klass.type_name}$$VTable"
         self.view.define_user_type(
             vtable_type_name,
             StructureBuilder.create(members=[
@@ -357,11 +358,11 @@ class SubstrateClass(SubstrateType):
             ),
         )
 
-    def fixup(self, component: Component | None = None):
+    def fixup(self, component: LazyComponent | Component | None = None):
         if self.is_enum:
             self._define_enums(component=component)
 
-    def _define_enums(self, component: Component | None = None):
+    def _define_enums(self, component: LazyComponent | Component | None = None):
         cls = type(self)
 
         # TODO: remove this once superclass structuring is done
@@ -375,6 +376,11 @@ class SubstrateClass(SubstrateType):
             )
         ]
         struct_builder.width = max(struct_builder.width, enum_type.type.width)
+
+        for i in range(enum_type.type.width):
+            if (index := struct_builder.index_by_offset(i)) is not None:
+                struct_builder.remove(index)
+
         self.instance_type.type = struct_builder.immutable_copy()
 
         if (companion := self.companion) is None:
@@ -406,7 +412,7 @@ class SubstrateClass(SubstrateType):
             #     resolved_enum
             # ) != self.address:
             #     raise ValueError
- 
+
             enum_accessor = self.instance_type.accessor(resolved_enum)
 
             if (name := enum_accessor['name'].value) is None:

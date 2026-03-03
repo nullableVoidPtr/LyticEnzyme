@@ -1,5 +1,5 @@
 from binaryninja import BinaryView, TypedDataAccessor
-from binaryninja.types import Type as BNType, TypeBuilder, StructureType, StructureBuilder, StructureMember, BaseStructure, ArrayType, NamedTypeReferenceType
+from binaryninja.types import Type as BNType, TypeBuilder, StructureType, StructureBuilder, StructureMember, BaseStructure, ArrayType, QualifiedName
 
 from types import new_class
 from typing import ClassVar, Self, Iterator, Type, TypeAlias, cast
@@ -8,7 +8,7 @@ from functools import wraps
 
 from ..heap import SvmHeap, SvmHeapAccessor
 from .builder import ObjectBuilder
-from .layout_encoding import LayoutEncoding, PureInstanceLayout, ArrayLikeLayout
+from .layout_encoding import LayoutEncoding, LayoutType, PureInstanceLayout, ArrayLikeLayout
 from .builder import LyticTypeBuilder
 
 RawTypeName: TypeAlias = str # Name as encoded in metadata
@@ -69,7 +69,6 @@ class SubstrateTypeMeta(type):
 class _SubstrateEigenType(type, metaclass=SubstrateTypeMeta):
     raw_name: RawTypeName
     name: ReadableTypeName
-    display_name: str
 
     heap: SvmHeap
 
@@ -79,6 +78,8 @@ class _SubstrateEigenType(type, metaclass=SubstrateTypeMeta):
 
     array_length_member: str = 'len'
     array_base_member: str = 'data'
+
+    auto_offsets: set[int]
 
     @staticmethod
     @abstractmethod
@@ -142,6 +143,8 @@ class _SubstrateEigenType(type, metaclass=SubstrateTypeMeta):
         cls.component_type = None
         cls.array_type = None
 
+        cls.auto_offsets = set()
+
         cls.__type_init__()
 
     @classmethod
@@ -196,7 +199,7 @@ class _SubstrateEigenType(type, metaclass=SubstrateTypeMeta):
         cls.layout = layout_encoding
 
         # Should remain invariant
-        if cls.layout.is_special or cls.name == 'java.lang.Object':
+        if (cls.layout.is_special and cls.layout.layout_type != LayoutType.ABSTRACT) or cls.name == 'java.lang.Object':
             return
 
         type_changed = False
@@ -284,9 +287,25 @@ class _SubstrateEigenType(type, metaclass=SubstrateTypeMeta):
 
         cls._id_hash_code_offset_override = None
 
+        for offset in cls.heap.relative_offsets_by_type(cls.hub_address):
+            _type = instance_type_builder.immutable_copy()
+
+            for i in range(cls.heap.address_size):
+                try:
+                    _type.member_at_offset_including_inherited(cls.view, offset + i)
+                    break
+                except ValueError:
+                    pass
+            else:
+                instance_type_builder.insert(
+                    offset,
+                    ObjectBuilder.object_pointer(cls.view, 'java.lang.Object'),
+                )
+                cls.auto_offsets.add(offset)
+                type_changed = True
+
         if type_changed:
             cls.type = instance_type_builder.immutable_copy()
-
 
     @property
     def registered_name(self):
@@ -574,7 +593,7 @@ class SubstrateType(metaclass=_SubstrateEigenType):
 
     @classmethod
     @typemethod
-    def references_from(cls, addr: int) -> Iterator[int]:
+    def references_from(cls, addr: int) -> Iterator[tuple[int, int]]:
         from . import is_pointer_to_java_type
 
         if not isinstance(_type := cls.type, StructureType):
@@ -592,7 +611,7 @@ class SubstrateType(metaclass=_SubstrateEigenType):
             if (target := cls.heap.read_pointer(addr + offset)) is None:
                 continue
 
-            yield target
+            yield (addr + offset, target)
 
         if not isinstance(cls.layout, ArrayLikeLayout) or not cls.layout.has_object_elements:
             return
@@ -617,7 +636,7 @@ class SubstrateType(metaclass=_SubstrateEigenType):
             )
         ):
             if (ref := cls.heap.resolve_target(ptr)) is not None:
-                yield ref
+                yield (ptr.address, ref)
 
     @classmethod
     def for_view(cls, view: BinaryView | SvmHeap) -> Type[Self]:
@@ -640,7 +659,7 @@ class SubstrateType(metaclass=_SubstrateEigenType):
             return None
 
     @staticmethod
-    def by_name(view_or_heap: BinaryView | SvmHeap, raw_type_name: str, type_name: str | None = None, *, find_hub = False) -> Type['SubstrateType']:
+    def by_name(view_or_heap: BinaryView | SvmHeap, raw_type_name: RawTypeName, type_name: ReadableTypeName | None = None, *, find_hub = False) -> Type['SubstrateType']:
         stype = cast(Type[SubstrateType], new_class(
             name=f"SubstrateType<{raw_type_name}>",
             kwds={

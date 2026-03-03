@@ -106,6 +106,7 @@ class ObjectBuilder(LyticTypeBuilder[StructureBuilder]):
             )
         )
 
+        self._builder.alignment = 8
         self._builder.attributes["LyticEnzyme.Hub"] = 'unknown' if hub_address is None else hex(hub_address)
 
         if raw_structure or structure_type is not None:
@@ -123,7 +124,7 @@ class ObjectBuilder(LyticTypeBuilder[StructureBuilder]):
                     BaseStructure(
                         Type.named_type_reference(
                             NamedTypeReferenceClass.ClassNamedTypeClass,
-                            'java.lang.Object'
+                            'java.lang.Object',
                         ),
                         offset=0,
                         width=view.arch.address_size,
@@ -167,7 +168,7 @@ class ObjectBuilder(LyticTypeBuilder[StructureBuilder]):
                 self.view.arch,
                 TypeBuilder.named_type_reference(
                     NamedTypeReferenceClass.ClassNamedTypeClass,
-                    QualifiedName(_type),
+                    _type,
                 ),
             )
 

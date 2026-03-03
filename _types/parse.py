@@ -82,7 +82,7 @@ def get_readable_type_name(type_name: str):
     parsed, index = _parse_type_name(type_name, 0)
     if index == len(type_name):
         return parsed
-    
+
     return type_name
 
 def _parse_type_name_as_type(

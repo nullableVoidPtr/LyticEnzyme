@@ -1,6 +1,6 @@
 from binaryninja import Type, BackgroundTask
 from .log import logger
-from ._types.meta import SubstrateType
+from ._types import SubstrateType
 from .heap import SvmHeap
 
 def recursively_define(heap: SvmHeap, addrs: list[int], *, task: BackgroundTask | None = None):
@@ -36,6 +36,14 @@ def recursively_define(heap: SvmHeap, addrs: list[int], *, task: BackgroundTask 
     visited = set()
     queue = addrs.copy()
 
+    def add_object(address: int):
+        if address in visited:
+            return
+        if address in queue:
+            return
+
+        queue.append(address)
+
     while queue and not getattr(task, 'cancelled', False):
         if task:
             task.progress = f"Analysing SVM heap ({defined_vars}/{defined_vars + len(queue)})"
@@ -55,24 +63,24 @@ def recursively_define(heap: SvmHeap, addrs: list[int], *, task: BackgroundTask 
             continue
         
         assert class_type.hub_address is not None
-        queue.append(class_type.hub_address)
+        add_object(class_type.hub_address)
         if class_type.component_type is not None:
             assert class_type.component_type.hub_address is not None
-            queue.append(class_type.component_type.hub_address)
+            add_object(class_type.component_type.hub_address)
 
         definite_width = class_type.define_instance_at(current)
         defined_vars += 1
 
-        for ref in class_type.references_from(current):
-            queue.append(ref)
+        for _, ref in class_type.references_from(current):
+            add_object(ref)
 
-        for ref in heap.find_refs_from(current):
-            queue.append(ref)
+        for _, ref in heap.find_refs_from(current):
+            add_object(ref)
 
         if definite_width is not None:
             next_object = current + definite_width
             aligned_next_object = next_object + (-next_object % heap.address_size)
-            queue.append(aligned_next_object)
+            add_object(aligned_next_object)
 
 
     logger.log_info(f"Defined {defined_vars} heap objects")

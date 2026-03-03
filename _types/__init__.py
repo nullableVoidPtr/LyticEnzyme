@@ -1,9 +1,6 @@
 from binaryninja import BinaryView
 from binaryninja.types import Type, PointerType, NamedTypeReferenceType, StructureType, QualifiedName
 
-from typing import Sequence, Callable
-
-from ..heap import SvmHeap
 from .builder import LyticTypeBuilder
 from .svm import svm_type_definitions
 from .jdk import jdk_type_definitions
@@ -54,8 +51,9 @@ def extract_pointer_to_java_type(view: BinaryView, type: Type) -> Type | None:
 
     target = type.target
     if isinstance(target, NamedTypeReferenceType):
-        if (target := target.target(view)) is None:
-            # raise ValueError
+        if (resolved := (target.target(view) or view.get_type_by_name(target.name))) is not None:
+            target = resolved
+        else:
             return None
 
     if 'LyticEnzyme.Hub' not in target.attributes:

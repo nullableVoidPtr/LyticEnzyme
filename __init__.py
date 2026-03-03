@@ -1,19 +1,20 @@
-from binaryninja import BinaryView, DataVariable, Function
+from binaryninja import BinaryView
 from binaryninja.types import Symbol, Type, FunctionType, FunctionParameter, NamedTypeReferenceType, StructureType
 from binaryninja.component import Component
 from binaryninja.callingconvention import CallingConvention
 from binaryninja.plugin import PluginCommand, BackgroundTask, BackgroundTaskThread
 from binaryninja.enums import SymbolType, SectionSemantics, VariableSourceType, SegmentFlag
 
-from typing import ClassVar, Iterator, overload, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 from .log import logger
 from ._types import create_java_types
 from ._types.meta import SubstrateType
 from ._types.svm.info import ImageCodeInfo
-from .heap import SvmHeap, SvmHeapAccessor
+from .heap import SvmHeap
 from .define import recursively_define
 from .callingconvention import SvmCallingConvention
+from .component import LazyComponent, ModuleComponent, add_object_symbols
 
 if TYPE_CHECKING:
     from ._types.jdk.klass import SubstrateClass
@@ -50,7 +51,7 @@ def find_image_interned_strings(heap: SvmHeap):
 
             return interned_strings
 
-def fixup_methods(heap: SvmHeap, image_code_info: ImageCodeInfo, *, components: dict['SubstrateClass', Component] | None = None, task: BackgroundTask | None = None):
+def fixup_methods(heap: SvmHeap, image_code_info: ImageCodeInfo, *, components: dict['SubstrateClass', LazyComponent | Component] | None = None, task: BackgroundTask | None = None):
     named_methods = 0
 
     heap.view.set_analysis_hold(True)
@@ -177,195 +178,6 @@ def fixup_methods(heap: SvmHeap, image_code_info: ImageCodeInfo, *, components: 
 
     heap.view.update_analysis()
 
-class LazyComponent:
-    name: str
-    functions: list[Function]
-    data_variables: list[DataVariable]
-
-    def __init__(self, name: str):
-        self.name = name
-        self.data_variables = []
-        self.functions = []
-
-    def add_data_variable(self, data_variable: DataVariable):
-        self.data_variables.append(data_variable)
-
-    def add_function(self, function: Function):
-        self.functions.append(function)
-
-    @overload
-    def merge_into(self, component: Component) -> Component: ...
-    @overload
-    def merge_into(self, component: 'LazyComponent') -> 'LazyComponent': ...
-
-    def merge_into(self, component: 'LazyComponent | Component'):
-        for data_variable in self.data_variables:
-            component.add_data_variable(data_variable)
-        for function in self.functions:
-            component.add_function(function)
-
-        return component
-
-    def reify(self, view: BinaryView, parent: str | Component | None = None) -> Component:
-        component = view.create_component(
-            self.name,
-            parent,
-        )
-
-        for data_variable in self.data_variables:
-            component.add_data_variable(data_variable)
-        for function in self.functions:
-            component.add_function(function)
-
-        return component
-
-class ModuleComponent:
-    _registry: ClassVar[dict[BinaryView, dict[str | None, 'ModuleComponent']]] = {}
-
-    _component: Component
-    view: BinaryView
-    packages: dict[str, LazyComponent]
-    classes: dict['SubstrateClass', LazyComponent]
-
-    package_components: dict[str, Component]
-    class_components: dict['SubstrateClass', Component]
-
-    def __init__(self, view: BinaryView, component: Component):
-        self._component = component
-        self.view = view
-        self.packages = {}
-        self.classes = {}
-
-        self.package_components = {}
-        self.class_components = {}
-
-    @property
-    def name(self):
-        return self._component.name
-
-    def add_data_variable(self, var: DataVariable):
-        self._component.add_data_variable(var)
-
-    def add_package(self, pkg_name: str):
-        component = self.packages[pkg_name] = LazyComponent(pkg_name)
-        return component
-
-    def add_class(self, klass: 'SubstrateClass'):
-        component = self.classes[klass] = LazyComponent(klass.name)
-        return component
-
-    def finalise(self):
-        package_parents: dict[str, str] = {}
-
-        for package in self.packages.keys():
-            if package == '':
-                continue
-
-            parts = package.split('.')
-            for i in range(len(parts) - 1, 0, -1):
-                if (ancestor := ".".join(parts[:i])) in self.packages:
-                    package_parents[package] = ancestor
-                    break
-
-        for package in sorted(self.packages.values(), key=lambda p: len(p.name)):
-            if package.name and package.name != self.name:
-                component = package.reify(
-                    self.view,
-                    (
-                        self.package_components[package_parents[package.name]]
-                        if package.name in package_parents else
-                        self._component
-                    ),
-                )
-            else:
-                component = package.merge_into(self._component)
-
-            self.package_components[package.name] = component
-
-        class_parents: dict['SubstrateClass', Component] = {}
-        nest_parents: dict['SubstrateClass', 'SubstrateClass'] = {}
-
-        from ._types.jdk.klass import SubstrateClass
-        class_type = SubstrateClass.for_view(self.view)
-        for klass in self.classes.keys():
-            if (component_type := klass.instance_type.component_type):
-                component_hub = component_type.hub_address
-                assert component_hub is not None
-
-                if (component_type_class := class_type(component_hub)) in self.classes and component_type.array_type == klass.instance_type:
-                    nest_parents[klass] = component_type_class
-                    continue
-
-            if klass.declaring_class in self.classes:
-                nest_parents[klass] = klass.declaring_class
-                continue
-
-            parts = klass.name.split('.')
-            class_parents[klass] = self._component
-            for i in range(len(parts) - 1, 0, -1):
-                if (package := '.'.join(parts[:i])) in self.packages:
-                    class_parents[klass] = self.package_components[package]
-                    break
-
-        for klass, parent in class_parents.items():
-            self.class_components[klass] = self.classes[klass].reify(self.view, parent)
-
-        while True:
-            missed = False
-            for klass, parent in nest_parents.items():
-                if klass in self.class_components:
-                    continue
-
-                if parent in nest_parents and parent not in self.class_components:
-                    missed = True
-                    continue
-
-                self.class_components[klass] = self.classes[klass].reify(self.view, self.class_components[parent])
-
-            if not missed:
-                break
-
-    @classmethod
-    def from_accessor(cls, accessor: SvmHeapAccessor):
-        name = accessor['name'].value
-
-        registry = cls._registry.setdefault(view := accessor.view, {})
-        if not (component := registry.get(name)):
-            component = registry[name] = cls(view, view.create_component(name, view.root_component) if name is not None else view.root_component)
-            mod_symbol = f'{name or "$unnamed"}.$module'
-            view.define_user_symbol(Symbol(SymbolType.DataSymbol, accessor.address, mod_symbol))
-            if (var := view.get_data_var_at(accessor.address)):
-                component.add_data_variable(var)
-
-            if (desc_addr := accessor.heap.resolve_target(accessor['descriptor'])) is not None:
-                if (desc_var := view.get_data_var_at(desc_addr)):
-                    component.add_data_variable(desc_var)
-                    view.define_user_symbol(
-                        Symbol(
-                            SymbolType.DataSymbol,
-                            desc_addr,
-                            f'{mod_symbol}.descriptor'
-                        )
-                    )
-
-            for m in ['reads', 'openPackages', 'exportedPackages']:
-                if (m_addr := accessor.heap.resolve_target(accessor[m])) is not None:
-                    if (m_var := view.get_data_var_at(m_addr)):
-                        component.add_data_variable(m_var)
-                        view.define_user_symbol(
-                            Symbol(
-                                SymbolType.DataSymbol,
-                                m_addr,
-                                f'{mod_symbol}.{m}'
-                            )
-                        )
-
-        return component
-    
-    @classmethod
-    def get_all_modules(cls, view: BinaryView) -> Iterator['ModuleComponent']:
-        yield from cls._registry.setdefault(view, {}).values()
-
 def _analyse(view: BinaryView, *, task: BackgroundTask | None = None):
     assert view.arch is not None
 
@@ -485,7 +297,9 @@ def _analyse(view: BinaryView, *, task: BackgroundTask | None = None):
 
             case _ if isinstance(var_type, StructureType) and any(base.type.name == class_type.name for base in var_type.base_structures):
                 klass = class_type(addr)
-                companion = klass.companion
+                accessor = class_type.accessor(addr)
+
+                companion = accessor['companion'].resolve()
                 assert companion is not None
 
                 if (mod_accessor := companion['module'].resolve()) is None:
@@ -494,24 +308,18 @@ def _analyse(view: BinaryView, *, task: BackgroundTask | None = None):
                 mod_component = ModuleComponent.from_accessor(mod_accessor)
                 component = mod_component.add_class(klass)
 
-                view.define_user_symbol(Symbol(SymbolType.DataSymbol, addr, f'{klass.name}.class'))
-                component.add_data_variable(var)
-
-                if (companion_var := view.get_data_var_at(companion.address)):
-                    component.add_data_variable(companion_var)
-                    view.define_user_symbol(Symbol(SymbolType.DataSymbol, companion.address, f'{klass.name}.class.companion'))
-
-                for m in ['classInitializationInfo', 'reflectionMetadata']:
-                    if (m_addr := heap.resolve_target(companion[m])) is not None:
-                        if (m_var := view.get_data_var_at(m_addr)):
-                            component.add_data_variable(m_var)
-                            view.define_user_symbol(
-                                Symbol(
-                                    SymbolType.DataSymbol,
-                                    m_addr,
-                                    f'{klass.name}.class.companion.{m}'
-                                )
-                            )
+                add_object_symbols(
+                    accessor,
+                    f'{klass.name}.class',
+                    {
+                        'name': ['value'],
+                        'companion': [
+                            # 'classInitializationInfo',
+                            'reflectionMetadata',
+                        ],
+                    },
+                    component=component,
+                )
 
     class_components: dict[SubstrateClass, Component] = {}
     for mod in ModuleComponent.get_all_modules(view):

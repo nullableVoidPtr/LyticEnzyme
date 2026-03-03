@@ -22,8 +22,7 @@ Breakdown of GraalVM's SubstrateVM towards analysis of Native Image (AOT) binari
   - [x] Thread register to `graal_isolatethread_t`
   - [ ] Code base register
 - [x] Class flags and modifiers
-- [ ] Java enums
-  - `SubstrateEnum`
+- [x] Java enums
 - [ ] Continuable analysis
 - [ ] LanguageRepresentation
   - instanceof
